@@ -1,0 +1,8 @@
+name = "gw2-toolbox"
+main = "worker.js"
+compatibility_date = "2024-01-01"
+
+# KV 命名空间绑定
+[[kv_namespaces]]
+binding = "GW2_DATA"
+id = "33d17db1ec9a4054be429822a89500a8" # 替换为你的实际 KV 命名空间 ID
