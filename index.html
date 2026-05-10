@@ -1,0 +1,597 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="theme-color" content="#0a0c10">
+<meta name="description" content="Guild Wars 2 工具箱 - 材料计算、交易分析、日常追踪">
+<title>GW2 工具箱</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div id="app">
+  <!-- Auth Overlay -->
+  <div class="auth-overlay" id="authOverlay">
+    <div class="auth-panel">
+      <div class="auth-title">GW2 工具箱</div>
+      <div class="auth-subtitle">登录以管理您的游戏数据</div>
+      <div class="auth-tabs">
+        <button class="auth-tab active" data-auth="login">登录</button>
+        <button class="auth-tab" data-auth="register">注册</button>
+      </div>
+      <div class="auth-form" id="authForm">
+        <input type="text" class="auth-input" id="authUsername" placeholder="用户名" autocomplete="username">
+        <input type="password" class="auth-input" id="authPassword" placeholder="密码" autocomplete="current-password">
+        <div class="auth-error" id="authError" style="display:none;"></div>
+        <button class="auth-btn" id="authSubmit">登录</button>
+      </div>
+      <div class="auth-hint">数据基于<a href="https://gw2.wishingstarmoye.com/gw2api" target="_blank" rel="noopener" class="auth-link">星岬岛API</a></div>
+    </div>
+  </div>
+
+  <!-- Header -->
+  <header class="app-header" id="appHeader" style="display:none;">
+    <div class="header-brand">
+      <button class="menu-toggle" id="menuToggle" aria-label="菜单">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+      </button>
+      <div class="brand" id="brandHome">
+        <svg class="brand-icon" width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+        <span class="brand-text">GW2 工具箱</span>
+      </div>
+    </div>
+    <nav class="header-nav">
+      <a href="#dashboard" class="nav-link active" data-page="dashboard">概览</a>
+      <a href="#daily" class="nav-link" data-page="daily">日常</a>
+      <a href="#crafting" class="nav-link" data-page="crafting">制作</a>
+      <a href="#trading" class="nav-link" data-page="trading">交易</a>
+      <a href="#todo" class="nav-link" data-page="todo">待办<span class="nav-badge" id="navTodoBadge" style="display:none;">0</span></a>
+      <a href="#admin" class="nav-link" data-page="admin" id="adminNav" style="display:none;">管理</a>
+    </nav>
+    <div class="header-actions">
+      <button class="icon-btn" id="themeToggle" title="切换主题">
+        <svg class="theme-icon-auto" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+        <svg class="theme-icon-light" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
+        <svg class="theme-icon-dark" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+      </button>
+      <div class="user-badge" id="userBadge">
+        <div class="user-avatar" id="userAvatar">U</div>
+        <span id="userName">用户</span>
+      </div>
+      <button class="icon-btn" id="exportBtn" title="导出数据">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+      </button>
+      <button class="icon-btn" id="importBtn" title="导入数据">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+      </button>
+      <button class="icon-btn" id="logoutBtn" title="退出登录">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <!-- Mobile Drawer -->
+  <div class="mobile-drawer" id="mobileDrawer">
+    <div class="drawer-overlay" id="drawerOverlay"></div>
+    <div class="drawer-content">
+      <div class="drawer-header">
+        <div class="brand">
+          <svg class="brand-icon" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+          <span class="brand-text">GW2 工具箱</span>
+        </div>
+        <button class="icon-btn" id="closeDrawer">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+      <nav class="drawer-nav">
+        <a href="#dashboard" class="drawer-link active" data-page="dashboard">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+          概览
+        </a>
+        <a href="#daily" class="drawer-link" data-page="daily">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+          日常
+        </a>
+        <a href="#crafting" class="drawer-link" data-page="crafting">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
+          制作
+        </a>
+        <a href="#trading" class="drawer-link" data-page="trading">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+          交易
+        </a>
+        <a href="#todo" class="drawer-link" data-page="todo">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+          待办<span class="nav-badge" id="drawerTodoBadge" style="display:none;">0</span>
+        </a>
+        <a href="#admin" class="drawer-link" data-page="admin" id="adminDrawerNav" style="display:none;">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+          用户管理
+        </a>
+      </nav>
+    </div>
+  </div>
+
+  <!-- Main Content -->
+  <main class="app-main" id="appMain" style="display:none;">
+    <!-- Dashboard View -->
+    <div class="view active" id="dashboard-view">
+      <div class="view-header">
+        <h1 class="view-title">概览</h1>
+        <p class="view-subtitle">快速查看今日日常、制作进度和待办事项</p>
+      </div>
+      <div class="stats-row">
+        <div class="stat-card" data-page="daily">
+          <div class="stat-icon blue">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+          </div>
+          <div class="stat-info">
+            <span class="stat-value" id="dailyCount">--</span>
+            <span class="stat-label">今日日常</span>
+          </div>
+        </div>
+        <a href="https://gw2.wishingstarmoye.com/gw2timer" target="_blank" rel="noopener noreferrer" class="stat-card" style="text-decoration:none;">
+          <div class="stat-icon red">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/><circle cx="12" cy="12" r="10"/></svg>
+          </div>
+          <div class="stat-info">
+            <span class="stat-value" id="timerCount">事件表</span>
+            <span class="stat-label">星岬岛</span>
+          </div>
+        </a>
+        <div class="stat-card" data-page="crafting">
+          <div class="stat-icon green">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
+          </div>
+          <div class="stat-info">
+            <span class="stat-value" id="projectCount">0</span>
+            <span class="stat-label">制作项目</span>
+          </div>
+        </div>
+        <div class="stat-card" data-page="trading">
+          <div class="stat-icon purple">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+          </div>
+          <div class="stat-info">
+            <span class="stat-value" id="tradeCount">0</span>
+            <span class="stat-label">交易记录</span>
+          </div>
+        </div>
+        <div class="stat-card" data-page="todo">
+          <div class="stat-icon amber">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+          </div>
+          <div class="stat-info">
+            <span class="stat-value" id="todoCount">0</span>
+            <span class="stat-label">待办事项</span>
+            <span class="stat-badge" id="dashboardTodoBadge" style="display:none;">0</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="section-block">
+        <div class="section-header">
+          <h2 class="section-title">今日日常</h2>
+          <div style="display:flex;align-items:center;gap:10px;">
+            <div class="segmented-control" id="dailyPreviewTypeControl">
+              <button class="segment-btn active" data-value="fractal">碎层</button>
+              <button class="segment-btn" data-value="raid">进攻任务</button>
+            </div>
+            <span class="badge primary" id="dailyDate">--</span>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-header">
+            <span class="panel-title" id="dailyPreviewTitle">碎层</span>
+            <span class="badge" id="dailyCountBadge">--</span>
+          </div>
+          <div id="dailyPreview">
+            <div class="loading-state"><div class="spinner"></div><span>加载中...</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="section-block">
+        <div class="section-header">
+          <h2 class="section-title">游戏活动</h2>
+          <span class="badge green" id="activityPreviewBadge">加载中</span>
+        </div>
+        <div class="panel">
+          <div id="activityPreview">
+            <div class="loading-state"><div class="spinner"></div><span>加载中...</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+
+
+    <!-- Daily View -->
+    <div class="view" id="daily-view">
+      <div class="view-header">
+        <h1 class="view-title">今日日常</h1>
+        <p class="view-subtitle">查看碎层、进攻任务和游戏活动</p>
+      </div>
+      <div class="daily-layout">
+        <div class="panel">
+          <div class="panel-header">
+            <span class="panel-title">碎层</span>
+            <span class="badge" id="fractalBadge">0</span>
+          </div>
+          <div class="daily-content" id="fractalContainer">
+            <div class="loading-state"><div class="spinner"></div><span>加载中...</span></div>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-header">
+            <span class="panel-title">进攻任务</span>
+            <span class="badge" id="strikeBadge">0</span>
+          </div>
+          <div class="daily-content" id="strikeContainer">
+            <div class="loading-state"><div class="spinner"></div><span>加载中...</span></div>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-header">
+            <span class="panel-title">游戏活动</span>
+          </div>
+          <div class="daily-content" id="activityContainer">
+            <div class="loading-state"><div class="spinner"></div><span>加载中...</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Crafting View -->
+    <div class="view" id="crafting-view">
+      <div class="view-header">
+        <h1 class="view-title">制作计算器</h1>
+        <p class="view-subtitle">管理装备制作项目，追踪材料需求</p>
+      </div>
+      <div class="crafting-layout">
+        <div class="panel sidebar-panel">
+          <div class="panel-header">
+            <span class="panel-title">项目列表</span>
+            <span class="badge" id="projectBadge">0</span>
+          </div>
+          <div class="project-list" id="projectList">
+            <div class="empty-small">暂无项目</div>
+          </div>
+          <div style="padding: 16px; border-top: 1px solid var(--border);">
+            <button class="btn btn-primary btn-block" id="addProjectBtn">+ 新建项目</button>
+          </div>
+        </div>
+        <div class="panel" id="projectDetailPanel" style="display:none;">
+          <div class="panel-header">
+            <span class="panel-title">项目详情</span>
+          </div>
+          <div id="projectDetail"></div>
+        </div>
+        <div class="panel" id="projectEmptyPanel">
+          <div class="panel-header">
+            <span class="panel-title">项目详情</span>
+          </div>
+          <div class="empty-state">
+            <svg class="empty-icon" width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
+            <p>选择一个项目或创建新项目</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Trading View -->
+    <div class="view" id="trading-view">
+      <div class="view-header">
+        <h1 class="view-title">交易分析</h1>
+        <p class="view-subtitle">计算交易利润和记录历史交易</p>
+      </div>
+      <div class="trading-layout">
+        <div class="panel">
+          <div class="panel-header">
+            <span class="panel-title">利润计算</span>
+          </div>
+          <div class="form-body">
+            <div class="form-group">
+              <label class="form-label">物品名称</label>
+              <input type="text" class="form-input" id="tradeName" placeholder="例如：星陨锭">
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label class="form-label">买入单价</label>
+                <input type="number" class="form-input" id="tradeBuyPrice" placeholder="0" step="0.01">
+              </div>
+              <div class="form-group">
+                <label class="form-label">数量</label>
+                <input type="number" class="form-input" id="tradeQuantity" placeholder="1" min="1" value="1">
+              </div>
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label class="form-label">卖出单价</label>
+                <input type="number" class="form-input" id="tradeSellPrice" placeholder="0" step="0.01">
+              </div>
+              <div class="form-group">
+                <label class="form-label">税率 (%)</label>
+                <input type="number" class="form-input" id="tradeFee" placeholder="15" value="15">
+              </div>
+            </div>
+            <div class="panel" id="tradeResultPanel" style="display:block;">
+              <div class="result-body" id="tradeResult"></div>
+            </div>
+            <div style="display: flex; justify-content: center; margin-top: 12px;">
+              <button class="btn btn-primary" id="saveTradeBtn" style="min-width: 200px;">保存记录</button>
+            </div>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-header">
+            <span class="panel-title">交易记录</span>
+            <div style="display:flex;gap:8px;">
+              <button class="btn btn-sm btn-ghost" id="deleteSelectedTradesBtn" style="display:none;">删除选中</button>
+              <button class="btn btn-sm btn-ghost" id="clearTradesBtn">清空</button>
+            </div>
+          </div>
+          <div class="trade-list" id="tradeHistory">
+            <div class="empty-small">暂无记录</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Todo View -->
+    <div class="view" id="todo-view">
+      <div class="view-header">
+        <h1 class="view-title">待办</h1>
+        <p class="view-subtitle">管理任务和计划，支持优先级和分类</p>
+      </div>
+      <div class="todo-layout">
+        <div class="panel">
+          <div class="panel-header">
+            <span class="panel-title">添加任务</span>
+          </div>
+          <div class="form-body">
+            <div class="form-group">
+              <input type="text" class="form-input" id="todoText" placeholder="输入任务内容...">
+            </div>
+            <div class="form-row three">
+              <div class="form-group">
+                <label class="form-label">分类</label>
+                <div class="segmented-control" id="todoCategoryControl">
+                  <button class="segment-btn active" data-value="general">通用</button>
+                  <button class="segment-btn" data-value="crafting">制作</button>
+                  <button class="segment-btn" data-value="trading">交易</button>
+                  <button class="segment-btn" data-value="raid">进攻</button>
+                  <button class="segment-btn" data-value="fractal">碎层</button>
+                  <button class="segment-btn" data-value="daily">日常</button>
+                </div>
+              </div>
+              <div class="form-group">
+                <label class="form-label">优先级</label>
+                <div class="segmented-control" id="todoPriorityControl">
+                  <button class="segment-btn" data-value="low">低</button>
+                  <button class="segment-btn active" data-value="medium">中</button>
+                  <button class="segment-btn" data-value="high">高</button>
+                </div>
+              </div>
+              <div class="form-group">
+                <label class="form-label">截止日期</label>
+                <div class="due-date-row">
+                  <input type="date" class="form-input" id="todoDueDate">
+                  <label class="toggle-switch no-due-toggle" style="width:36px;height:20px;" title="无截止日期">
+                    <input type="checkbox" id="todoNoDueDate" checked>
+                    <span class="toggle-slider" style="border-radius:20px;"></span>
+                  </label>
+                  <span class="reminder-label">无期限</span>
+                </div>
+              </div>
+            </div>
+            <div class="form-row" style="margin-top:12px;">
+              <div class="form-group" style="flex:1;">
+                <label class="form-label">循环提醒</label>
+                <div class="reminder-row">
+                  <label class="toggle-switch" style="width:36px;height:20px;">
+                    <input type="checkbox" id="todoReminderToggle">
+                    <span class="toggle-slider" style="border-radius:20px;"></span>
+                  </label>
+                  <span class="reminder-label" id="todoReminderLabel">关闭</span>
+                  <div class="segmented-control reminder-segment" id="todoReminderCycleControl" style="display:none;">
+                    <button class="segment-btn active" data-value="daily">每日</button>
+                    <button class="segment-btn" data-value="weekly">每周</button>
+                    <button class="segment-btn" data-value="3days">3天</button>
+                    <button class="segment-btn" data-value="7days">7天</button>
+                    <button class="segment-btn" data-value="14days">14天</button>
+                    <button class="segment-btn" data-value="30days">30天</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <button class="btn btn-primary btn-block" id="addTodoBtn" style="margin-top:6px;">添加任务</button>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-header">
+            <span class="panel-title">任务列表</span>
+            <div class="filter-tabs">
+              <button class="filter-tab active" data-filter="all">全部</button>
+              <button class="filter-tab" data-filter="active">进行中</button>
+              <button class="filter-tab" data-filter="completed">已完成</button>
+            </div>
+          </div>
+          <div class="todo-list" id="todoList">
+            <div class="empty-small">暂无任务</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Admin View -->
+    <div class="view" id="admin-view">
+      <div class="view-header">
+        <h1 class="view-title">用户管理</h1>
+        <p class="view-subtitle">管理系统用户、注册开关和账户设置</p>
+      </div>
+      <div class="admin-layout">
+        <!-- 系统设置 -->
+        <div class="panel">
+          <div class="panel-header">
+            <span class="panel-title">系统设置</span>
+          </div>
+          <div class="form-body">
+            <div class="setting-item">
+              <div class="setting-info">
+                <div class="setting-label">开放注册</div>
+                <div class="setting-desc">允许新用户自行注册账户</div>
+              </div>
+              <label class="toggle-switch">
+                <input type="checkbox" id="registerToggle" checked>
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <!-- Admin 账户设置 -->
+        <div class="panel">
+          <div class="panel-header">
+            <span class="panel-title">管理员账户</span>
+          </div>
+          <div class="form-body">
+            <div class="form-row">
+              <div class="form-group">
+                <label class="form-label">管理员用户名</label>
+                <input type="text" class="form-input" id="adminNameInput" placeholder="输入新用户名">
+              </div>
+              <div class="form-group">
+                <label class="form-label">新密码</label>
+                <input type="password" class="form-input" id="adminPassInput" placeholder="输入新密码">
+              </div>
+            </div>
+            <button class="btn btn-primary btn-block" id="updateAdminBtn">更新管理员信息</button>
+          </div>
+        </div>
+
+        <!-- 添加用户 -->
+        <div class="panel">
+          <div class="panel-header">
+            <span class="panel-title">添加用户</span>
+          </div>
+          <div class="form-body">
+            <div class="form-row">
+              <div class="form-group">
+                <label class="form-label">用户名</label>
+                <input type="text" class="form-input" id="newUserName" placeholder="输入用户名">
+              </div>
+              <div class="form-group">
+                <label class="form-label">密码</label>
+                <input type="password" class="form-input" id="newUserPassword" placeholder="输入密码">
+              </div>
+            </div>
+            <div class="form-group">
+              <label class="form-label">角色</label>
+              <div class="segmented-control" id="newUserRoleControl">
+                <button class="segment-btn active" data-value="user">普通用户</button>
+                <button class="segment-btn" data-value="admin">管理员</button>
+              </div>
+            </div>
+            <button class="btn btn-primary btn-block" id="addUserBtn">添加用户</button>
+          </div>
+        </div>
+
+        <!-- 用户列表 -->
+        <div class="panel" style="grid-column: 1 / -1;">
+          <div class="panel-header">
+            <span class="panel-title">用户列表</span>
+            <span class="badge" id="userCountBadge">0</span>
+          </div>
+          <div class="admin-users" id="adminUserList">
+            <div class="empty-small">暂无用户</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- Toast Container -->
+  <div class="toast-container" id="toastContainer"></div>
+
+  <!-- Edit Todo Modal -->
+  <div class="modal-overlay" id="editTodoModal" style="display:none;">
+    <div class="modal-panel">
+      <div class="modal-header">
+        <h3 class="modal-title">编辑任务</h3>
+        <button class="icon-btn" id="closeEditTodoModal">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label class="form-label">任务内容</label>
+          <input type="text" class="form-input" id="editTodoText">
+        </div>
+        <div class="form-row three">
+          <div class="form-group">
+            <label class="form-label">分类</label>
+            <div class="segmented-control" id="editTodoCategoryControl">
+              <button class="segment-btn" data-value="general">通用</button>
+              <button class="segment-btn" data-value="crafting">制作</button>
+              <button class="segment-btn" data-value="trading">交易</button>
+              <button class="segment-btn" data-value="raid">进攻</button>
+              <button class="segment-btn" data-value="fractal">碎层</button>
+              <button class="segment-btn" data-value="daily">日常</button>
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">优先级</label>
+            <div class="segmented-control" id="editTodoPriorityControl">
+              <button class="segment-btn" data-value="low">低</button>
+              <button class="segment-btn" data-value="medium">中</button>
+              <button class="segment-btn" data-value="high">高</button>
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">截止日期</label>
+            <div class="due-date-row">
+              <input type="date" class="form-input" id="editTodoDueDate">
+              <label class="toggle-switch no-due-toggle" style="width:36px;height:20px;" title="无截止日期">
+                <input type="checkbox" id="editTodoNoDueDate">
+                <span class="toggle-slider" style="border-radius:20px;"></span>
+              </label>
+              <span class="reminder-label">无期限</span>
+            </div>
+          </div>
+        </div>
+        <div class="form-row" style="margin-top:12px;">
+          <div class="form-group" style="flex:1;">
+            <label class="form-label">循环提醒</label>
+            <div class="reminder-row">
+              <label class="toggle-switch" style="width:36px;height:20px;">
+                <input type="checkbox" id="editTodoReminderToggle">
+                <span class="toggle-slider" style="border-radius:20px;"></span>
+              </label>
+              <span class="reminder-label" id="editTodoReminderLabel">关闭</span>
+              <div class="segmented-control reminder-segment" id="editTodoReminderCycleControl" style="display:none;">
+                <button class="segment-btn" data-value="daily">每日</button>
+                <button class="segment-btn" data-value="weekly">每周</button>
+                <button class="segment-btn" data-value="3days">3天</button>
+                <button class="segment-btn" data-value="7days">7天</button>
+                <button class="segment-btn" data-value="14days">14天</button>
+                <button class="segment-btn" data-value="30days">30天</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" id="cancelEditTodo">取消</button>
+        <button class="btn btn-primary" id="saveEditTodo">保存</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
