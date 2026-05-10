@@ -6,23 +6,16 @@
 // ===== Storage Layer =====
 const Storage = {
     prefix: 'gw2_toolbox_v2_',
-    cloudEnabled: false,
+    cloudEnabled: true, // 同域部署默认启用
     userToken: null,
 
     init() {
-        this.userToken = localStorage.getItem('gw2_cloud_token');
-        // 同域部署时，只要有 token 就启用云端同步
-        this.cloudEnabled = !!this.userToken;
+        // 云端同步默认启用，登录后自动设置 token
+        this.cloudEnabled = true;
     },
 
     setToken(token) {
         this.userToken = token;
-        if (token) {
-            localStorage.setItem('gw2_cloud_token', token);
-        } else {
-            localStorage.removeItem('gw2_cloud_token');
-        }
-        this.cloudEnabled = !!token;
     },
 
     getCloudUrl(key) {
@@ -2039,80 +2032,6 @@ const Auth = {
             Navigation.navigate('dashboard');
         });
 
-        // Cloud sync settings
-        this.initCloudSettings();
-    },
-
-    initCloudSettings() {
-        // Add cloud config UI if not exists
-        const authPanel = document.querySelector('.auth-panel');
-        if (authPanel && !document.getElementById('cloudConfig')) {
-            const cloudDiv = document.createElement('div');
-            cloudDiv.id = 'cloudConfig';
-            cloudDiv.style.cssText = 'margin-top:16px;padding-top:16px;border-top:1px solid var(--border);';
-            cloudDiv.innerHTML = `
-                <div style="font-size:12px;color:var(--text-muted);margin-bottom:8px;text-align:center;">云端同步配置（可选）</div>
-                <input type="text" class="auth-input" id="cloudToken" placeholder="同步令牌（任意字符串，用于多设备同步）" style="margin-bottom:8px;">
-                <div style="display:flex;gap:8px;">
-                    <button class="auth-btn" id="saveCloudBtn" style="flex:1;font-size:12px;padding:8px;">保存配置</button>
-                    <button class="auth-btn" id="clearCloudBtn" style="flex:1;font-size:12px;padding:8px;background:var(--bg-hover);color:var(--text-secondary);">清除</button>
-                </div>
-                <div id="cloudStatus" style="font-size:11px;margin-top:6px;text-align:center;color:var(--text-muted);"></div>
-            `;
-            authPanel.appendChild(cloudDiv);
-
-            // Load saved token
-            const savedToken = localStorage.getItem('gw2_cloud_token') || '';
-            document.getElementById('cloudToken').value = savedToken;
-
-            this.updateCloudStatus();
-
-            document.getElementById('saveCloudBtn').addEventListener('click', async () => {
-                const token = document.getElementById('cloudToken').value.trim();
-
-                if (token) {
-                    Storage.setToken(token);
-                }
-
-                // Test connection
-                if (token) {
-                    try {
-                        const testUrl = `/api/data/test?token=${encodeURIComponent(token)}`;
-                        const response = await fetch(testUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '"ping"' });
-                        if (response.ok) {
-                            Toast.show('云端同步已启用', 'success');
-                            this.updateCloudStatus('已连接');
-                        } else {
-                            Toast.show('连接失败，请检查令牌', 'error');
-                            this.updateCloudStatus('连接失败');
-                        }
-                    } catch (e) {
-                        Toast.show('连接失败: ' + e.message, 'error');
-                        this.updateCloudStatus('连接失败');
-                    }
-                }
-            });
-
-            document.getElementById('clearCloudBtn').addEventListener('click', () => {
-                Storage.setToken(null);
-                document.getElementById('cloudToken').value = '';
-                this.updateCloudStatus('未配置');
-                Toast.show('云端配置已清除');
-            });
-        }
-    },
-
-    updateCloudStatus(status) {
-        const el = document.getElementById('cloudStatus');
-        if (!el) return;
-        if (status) {
-            el.textContent = '状态: ' + status;
-            el.style.color = status === '已连接' ? 'var(--success)' : 'var(--danger)';
-        } else {
-            const hasToken = !!localStorage.getItem('gw2_cloud_token');
-            el.textContent = hasToken ? '状态: 已配置' : '状态: 未配置';
-            el.style.color = 'var(--text-muted)';
-        }
     },
 
     updateAuthUI() {
@@ -2164,6 +2083,9 @@ const Auth = {
         const user = this.users.find(u => u.username === username && u.password === password);
         if (user) {
             this.currentUser = user;
+            // 使用用户名+密码作为云端同步标识
+            const token = `${username}:${password}`;
+            Storage.setToken(token);
             await Storage.set('current_user', user);
             await this.loadUserData();
             this.showApp();
@@ -2210,6 +2132,7 @@ const Auth = {
     async logout() {
         await this.saveUserData();
         Storage.remove('current_user');
+        Storage.setToken(null); // 清除云端同步标识
         this.currentUser = null;
         document.getElementById('appHeader').style.display = 'none';
         document.getElementById('appMain').style.display = 'none';
