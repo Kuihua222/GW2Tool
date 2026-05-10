@@ -6,27 +6,47 @@
 // ===== Storage Layer =====
 const Storage = {
     prefix: 'gw2_toolbox_v2_',
-    cloudEnabled: false, // 未登录时不启用，防止请求卡住
+    cloudEnabled: false,
     userToken: null,
+    currentUserId: null,
 
     init() {
-        // 云端同步默认关闭，登录后通过 setToken 启用
         this.cloudEnabled = false;
     },
 
-    setToken(token) {
+    setToken(token, userId) {
         this.userToken = token;
-        // 有 token 才启用云端同步
+        this.currentUserId = userId;
         this.cloudEnabled = !!token;
+    },
+
+    clearToken() {
+        this.userToken = null;
+        this.currentUserId = null;
+        this.cloudEnabled = false;
+    },
+
+    // 自动添加用户前缀，实现数据隔离
+    getUserKey(key) {
+        // 系统级数据（用户列表、设置）不加用户前缀
+        const systemKeys = ['system_users', 'system_settings', 'current_user'];
+        if (systemKeys.includes(key)) return key;
+        // 用户数据加前缀
+        if (this.currentUserId) {
+            return `user_${this.currentUserId}_${key}`;
+        }
+        return key;
     },
 
     getCloudUrl(key) {
         if (!this.userToken) return null;
-        // 同域部署：直接使用 /api/data/ 路径
-        return `/api/data/${key}?token=${encodeURIComponent(this.userToken)}`;
+        const userKey = this.getUserKey(key);
+        return `/api/data/${userKey}?token=${encodeURIComponent(this.userToken)}`;
     },
 
     async get(key) {
+        const userKey = this.getUserKey(key);
+
         // Try cloud first if enabled
         if (this.cloudEnabled) {
             try {
@@ -35,8 +55,7 @@ const Storage = {
                 if (response.ok) {
                     const result = await response.json();
                     if (result.data !== null) {
-                        // Sync to local as cache
-                        localStorage.setItem(this.prefix + key, JSON.stringify(result.data));
+                        localStorage.setItem(this.prefix + userKey, JSON.stringify(result.data));
                         return result.data;
                     }
                 }
@@ -47,7 +66,7 @@ const Storage = {
 
         // Fallback to localStorage
         try {
-            const data = localStorage.getItem(this.prefix + key);
+            const data = localStorage.getItem(this.prefix + userKey);
             return data ? JSON.parse(data) : null;
         } catch (e) {
             console.error('Storage read error:', e);
@@ -56,9 +75,11 @@ const Storage = {
     },
 
     async set(key, value) {
+        const userKey = this.getUserKey(key);
+
         // Always save to localStorage as cache/backup
         try {
-            localStorage.setItem(this.prefix + key, JSON.stringify(value));
+            localStorage.setItem(this.prefix + userKey, JSON.stringify(value));
         } catch (e) {
             console.error('Local storage write error:', e);
         }
@@ -83,7 +104,8 @@ const Storage = {
     },
 
     remove(key) {
-        localStorage.removeItem(this.prefix + key);
+        const userKey = this.getUserKey(key);
+        localStorage.removeItem(this.prefix + userKey);
         if (this.cloudEnabled) {
             try {
                 const url = this.getCloudUrl(key);
@@ -94,21 +116,10 @@ const Storage = {
         }
     },
 
-    async syncAll() {
-        if (!this.cloudEnabled) return;
-
-        const keys = ['projects', 'trades', 'todos', 'daily_progress', 'theme', 'daily_preview_type'];
-        for (const key of keys) {
-            const value = this.getLocal(key);
-            if (value !== null) {
-                await this.set(key, value);
-            }
-        }
-    },
-
     getLocal(key) {
+        const userKey = this.getUserKey(key);
         try {
-            const data = localStorage.getItem(this.prefix + key);
+            const data = localStorage.getItem(this.prefix + userKey);
             return data ? JSON.parse(data) : null;
         } catch (e) {
             return null;
@@ -2018,6 +2029,10 @@ const Auth = {
         const savedUser = await Storage.get('current_user');
         if (savedUser) {
             this.currentUser = savedUser;
+            // 恢复云端同步
+            Storage.setToken(savedUser.id, savedUser.id);
+            await this.loadUserData();
+            await AppState.init();
             this.showApp();
         }
 
@@ -2093,9 +2108,8 @@ const Auth = {
         const user = this.users.find(u => u.username === username && u.password === password);
         if (user) {
             this.currentUser = user;
-            // 使用用户名+密码作为云端同步标识
-            const token = `${username}:${password}`;
-            Storage.setToken(token);
+            // 使用用户ID作为云端同步标识，改密码不影响数据
+            Storage.setToken(user.id, user.id);
             await Storage.set('current_user', user);
             await this.loadUserData();
             await AppState.init(); // 初始化用户数据到 AppState
@@ -2143,7 +2157,7 @@ const Auth = {
     async logout() {
         await this.saveUserData();
         Storage.remove('current_user');
-        Storage.setToken(null); // 清除云端同步标识
+        Storage.clearToken(); // 清除云端同步标识
         this.currentUser = null;
         document.getElementById('appHeader').style.display = 'none';
         document.getElementById('appMain').style.display = 'none';
@@ -2184,20 +2198,20 @@ const Auth = {
 
     async loadUserData() {
         if (!this.currentUser) return;
-        const userKey = `user_${this.currentUser.id}_`;
-        AppState.projects = await Storage.get(userKey + 'projects') || [];
-        AppState.trades = await Storage.get(userKey + 'trades') || [];
-        AppState.todos = await Storage.get(userKey + 'todos') || [];
-        AppState.dailyProgress = await Storage.get(userKey + 'daily_progress') || {};
+        // Storage 层会自动添加用户前缀，直接传 key 即可
+        AppState.projects = await Storage.get('projects') || [];
+        AppState.trades = await Storage.get('trades') || [];
+        AppState.todos = await Storage.get('todos') || [];
+        AppState.dailyProgress = await Storage.get('daily_progress') || {};
     },
 
     async saveUserData() {
         if (!this.currentUser) return;
-        const userKey = `user_${this.currentUser.id}_`;
-        await Storage.set(userKey + 'projects', AppState.projects);
-        await Storage.set(userKey + 'trades', AppState.trades);
-        await Storage.set(userKey + 'todos', AppState.todos);
-        await Storage.set(userKey + 'daily_progress', AppState.dailyProgress);
+        // Storage 层会自动添加用户前缀，直接传 key 即可
+        await Storage.set('projects', AppState.projects);
+        await Storage.set('trades', AppState.trades);
+        await Storage.set('todos', AppState.todos);
+        await Storage.set('daily_progress', AppState.dailyProgress);
     },
 
     async addUser() {
