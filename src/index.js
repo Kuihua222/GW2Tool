@@ -1,5 +1,5 @@
 /**
- * GW2 Toolbox - Cloudflare Worker Backend
+ * GW2 Toolbox - Cloudflare Worker with Static Assets
  * Features: Static asset serving, API proxy, KV data persistence
  */
 
@@ -24,10 +24,6 @@ function jsonResponse(data, status = 200) {
 function errorResponse(message, status = 400) {
   return jsonResponse({ error: message }, status);
 }
-
-// ===== Static Assets (Embedded) =====
-// In production, these are served by Cloudflare Pages or external storage
-// For Workers-only deployment, we serve the SPA and let it fetch from CDN
 
 // ===== KV Data API =====
 async function handleDataRequest(request, env, userId) {
@@ -60,7 +56,6 @@ async function handleDataRequest(request, env, userId) {
       if (!body) {
         return errorResponse('Empty body', 400);
       }
-      // Validate JSON
       try {
         JSON.parse(body);
       } catch {
@@ -112,8 +107,6 @@ async function handleApiProxy(request) {
 function getUserId(request) {
   const url = new URL(request.url);
   const token = url.searchParams.get('token') || request.headers.get('Authorization')?.replace('Bearer ', '');
-  // Simple token-based auth: token is the user ID itself (or a hash)
-  // In production, you should use JWT or Cloudflare Access
   return token || 'anonymous';
 }
 
@@ -187,52 +180,8 @@ export default {
       return handleApiProxy(request);
     }
 
-    // Serve static assets - try to get from KV first, then fallback to embedded
-    const path = url.pathname === '/' ? '/index.html' : url.pathname;
-
-    // Try to serve from KV storage (for deployed assets)
-    try {
-      const asset = await env.GW2_DATA.get(`__asset__${path}`, 'arrayBuffer');
-      if (asset) {
-        const contentType = getContentType(path);
-        return new Response(asset, {
-          headers: {
-            'Content-Type': contentType,
-            'Cache-Control': 'public, max-age=3600',
-            ...corsHeaders,
-          },
-        });
-      }
-    } catch {
-      // Fall through to embedded assets
-    }
-
-    // Fallback: return SPA for client-side routing
-    // In production with Pages, this is handled automatically
-    return new Response('GW2 Toolbox Worker is running. Please deploy frontend assets to Cloudflare Pages or use wrangler pages deploy.', {
-      status: 200,
-      headers: {
-        'Content-Type': 'text/plain; charset=utf-8',
-        ...corsHeaders,
-      },
-    });
+    // Serve static assets using Workers Assets
+    // This will automatically serve files from the [assets] directory
+    return env.ASSETS.fetch(request);
   },
 };
-
-function getContentType(path) {
-  const ext = path.split('.').pop()?.toLowerCase();
-  const types = {
-    html: 'text/html; charset=utf-8',
-    css: 'text/css; charset=utf-8',
-    js: 'application/javascript; charset=utf-8',
-    json: 'application/json',
-    png: 'image/png',
-    jpg: 'image/jpeg',
-    jpeg: 'image/jpeg',
-    svg: 'image/svg+xml',
-    ico: 'image/x-icon',
-    woff2: 'font/woff2',
-    woff: 'font/woff',
-  };
-  return types[ext] || 'application/octet-stream';
-}

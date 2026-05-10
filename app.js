@@ -11,7 +11,8 @@ const Storage = {
 
     init() {
         this.userToken = localStorage.getItem('gw2_cloud_token');
-        this.cloudEnabled = !!this.userToken && !!ApiService.workerBaseUrl;
+        // 同域部署时，只要有 token 就启用云端同步
+        this.cloudEnabled = !!this.userToken;
     },
 
     setToken(token) {
@@ -21,12 +22,13 @@ const Storage = {
         } else {
             localStorage.removeItem('gw2_cloud_token');
         }
-        this.cloudEnabled = !!token && !!ApiService.workerBaseUrl;
+        this.cloudEnabled = !!token;
     },
 
     getCloudUrl(key) {
-        if (!this.userToken || !ApiService.workerBaseUrl) return null;
-        return `${ApiService.workerBaseUrl}/api/data/${key}?token=${encodeURIComponent(this.userToken)}`;
+        if (!this.userToken) return null;
+        // 同域部署：直接使用 /api/data/ 路径
+        return `/api/data/${key}?token=${encodeURIComponent(this.userToken)}`;
     },
 
     async get(key) {
@@ -300,28 +302,12 @@ const Toast = {
 const ApiService = {
     // 直接API地址（默认）
     directBaseUrl: 'https://gw2.wishingstarmoye.com/gw2api',
-    // Worker代理地址（自动检测或从配置读取）
-    workerBaseUrl: localStorage.getItem('gw2_worker_url') || '',
+    // 同域部署时自动使用当前域名
     cacheDuration: 5 * 60 * 1000,
 
     get baseUrl() {
-        // 如果配置了Worker地址且当前是同源或Worker地址，则使用Worker
-        if (this.workerBaseUrl) {
-            return this.workerBaseUrl + '/gw2api';
-        }
-        return this.directBaseUrl;
-    },
-
-    setWorkerUrl(url) {
-        if (url) {
-            // Remove trailing slash
-            url = url.replace(/\/$/, '');
-            localStorage.setItem('gw2_worker_url', url);
-        } else {
-            localStorage.removeItem('gw2_worker_url');
-        }
-        this.workerBaseUrl = url || '';
-        Storage.init();
+        // 同域部署：直接使用 /gw2api 路径
+        return '/gw2api';
     },
 
     async fetchDaily(force = false) {
@@ -1927,7 +1913,7 @@ const DataManager = {
         // Try cloud export first if enabled
         if (Storage.cloudEnabled) {
             try {
-                const url = `${ApiService.workerBaseUrl}/api/export?token=${encodeURIComponent(Storage.userToken)}`;
+                const url = `/api/export?token=${encodeURIComponent(Storage.userToken)}`;
                 const response = await fetch(url);
                 if (response.ok) {
                     const data = await response.json();
@@ -2066,8 +2052,7 @@ const Auth = {
             cloudDiv.style.cssText = 'margin-top:16px;padding-top:16px;border-top:1px solid var(--border);';
             cloudDiv.innerHTML = `
                 <div style="font-size:12px;color:var(--text-muted);margin-bottom:8px;text-align:center;">云端同步配置（可选）</div>
-                <input type="text" class="auth-input" id="cloudWorkerUrl" placeholder="Worker 地址，如: https://gw2-toolbox.xxx.workers.dev" style="margin-bottom:8px;">
-                <input type="text" class="auth-input" id="cloudToken" placeholder="同步令牌（任意字符串）" style="margin-bottom:8px;">
+                <input type="text" class="auth-input" id="cloudToken" placeholder="同步令牌（任意字符串，用于多设备同步）" style="margin-bottom:8px;">
                 <div style="display:flex;gap:8px;">
                     <button class="auth-btn" id="saveCloudBtn" style="flex:1;font-size:12px;padding:8px;">保存配置</button>
                     <button class="auth-btn" id="clearCloudBtn" style="flex:1;font-size:12px;padding:8px;background:var(--bg-hover);color:var(--text-secondary);">清除</button>
@@ -2076,35 +2061,29 @@ const Auth = {
             `;
             authPanel.appendChild(cloudDiv);
 
-            // Load saved values
-            const savedUrl = localStorage.getItem('gw2_worker_url') || '';
+            // Load saved token
             const savedToken = localStorage.getItem('gw2_cloud_token') || '';
-            document.getElementById('cloudWorkerUrl').value = savedUrl;
             document.getElementById('cloudToken').value = savedToken;
 
             this.updateCloudStatus();
 
             document.getElementById('saveCloudBtn').addEventListener('click', async () => {
-                const url = document.getElementById('cloudWorkerUrl').value.trim();
                 const token = document.getElementById('cloudToken').value.trim();
 
-                if (url) {
-                    ApiService.setWorkerUrl(url);
-                }
                 if (token) {
                     Storage.setToken(token);
                 }
 
                 // Test connection
-                if (url && token) {
+                if (token) {
                     try {
-                        const testUrl = `${url}/api/data/test?token=${encodeURIComponent(token)}`;
+                        const testUrl = `/api/data/test?token=${encodeURIComponent(token)}`;
                         const response = await fetch(testUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '"ping"' });
                         if (response.ok) {
                             Toast.show('云端同步已启用', 'success');
                             this.updateCloudStatus('已连接');
                         } else {
-                            Toast.show('连接失败，请检查地址和令牌', 'error');
+                            Toast.show('连接失败，请检查令牌', 'error');
                             this.updateCloudStatus('连接失败');
                         }
                     } catch (e) {
@@ -2115,9 +2094,7 @@ const Auth = {
             });
 
             document.getElementById('clearCloudBtn').addEventListener('click', () => {
-                ApiService.setWorkerUrl('');
                 Storage.setToken(null);
-                document.getElementById('cloudWorkerUrl').value = '';
                 document.getElementById('cloudToken').value = '';
                 this.updateCloudStatus('未配置');
                 Toast.show('云端配置已清除');
@@ -2132,8 +2109,8 @@ const Auth = {
             el.textContent = '状态: ' + status;
             el.style.color = status === '已连接' ? 'var(--success)' : 'var(--danger)';
         } else {
-            const hasConfig = !!localStorage.getItem('gw2_worker_url');
-            el.textContent = hasConfig ? '状态: 已配置' : '状态: 未配置';
+            const hasToken = !!localStorage.getItem('gw2_cloud_token');
+            el.textContent = hasToken ? '状态: 已配置' : '状态: 未配置';
             el.style.color = 'var(--text-muted)';
         }
     },
