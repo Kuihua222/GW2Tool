@@ -6,4 +6,4 @@ compatibility_date = "2025-05-01"
 # 部署后自动创建，无需手动配置
 [[kv_namespaces]]
 binding = "GW2_DATA"
-id = ""
+id = "33d17db1ec9a4054be429822a89500a8"
