@@ -6,16 +6,18 @@
 // ===== Storage Layer =====
 const Storage = {
     prefix: 'gw2_toolbox_v2_',
-    cloudEnabled: true, // 同域部署默认启用
+    cloudEnabled: false, // 未登录时不启用，防止请求卡住
     userToken: null,
 
     init() {
-        // 云端同步默认启用，登录后自动设置 token
-        this.cloudEnabled = true;
+        // 云端同步默认关闭，登录后通过 setToken 启用
+        this.cloudEnabled = false;
     },
 
     setToken(token) {
         this.userToken = token;
+        // 有 token 才启用云端同步
+        this.cloudEnabled = !!token;
     },
 
     getCloudUrl(key) {
@@ -118,24 +120,32 @@ const Storage = {
 const AppState = {
     currentPage: 'dashboard',
     currentProjectId: null,
-    projects: Storage.get('projects') || [],
-    trades: Storage.get('trades') || [],
-    todos: Storage.get('todos') || [],
-    dailyProgress: Storage.get('daily_progress') || {},
+    projects: [],
+    trades: [],
+    todos: [],
+    dailyProgress: {},
     todoFilter: 'all',
     dailyData: null,
     activityData: null,
     timerData: null,
     lastDailyFetch: 0,
     lastActivityFetch: 0,
-    lastTimerFetch: 0
+    lastTimerFetch: 0,
+
+    async init() {
+        this.projects = await Storage.get('projects') || [];
+        this.trades = await Storage.get('trades') || [];
+        this.todos = await Storage.get('todos') || [];
+        this.dailyProgress = await Storage.get('daily_progress') || {};
+    }
 };
 
 // ===== Theme Manager =====
 const Theme = {
-    current: Storage.get('theme') || 'auto',
+    current: 'auto',
 
-    init() {
+    async init() {
+        this.current = await Storage.get('theme') || 'auto';
         this.apply();
         document.getElementById('themeToggle')?.addEventListener('click', () => this.toggle());
     },
@@ -2088,6 +2098,7 @@ const Auth = {
             Storage.setToken(token);
             await Storage.set('current_user', user);
             await this.loadUserData();
+            await AppState.init(); // 初始化用户数据到 AppState
             this.showApp();
             Toast.show(`欢迎回来，${user.username}`);
         } else {
@@ -2334,7 +2345,7 @@ const Admin = {
 
 // ===== Initialization =====
 document.addEventListener('DOMContentLoaded', async () => {
-    Theme.init();
+    await Theme.init();
     Toast.init();
     await Auth.init();
     Navigation.init();
@@ -2344,6 +2355,8 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // Only navigate if user is already logged in
     if (Auth.currentUser) {
+        // Init app state after login
+        await AppState.init();
         // Preload API data for dashboard
         Promise.all([
             ApiService.fetchDaily(true),
