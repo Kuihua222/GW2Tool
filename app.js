@@ -211,8 +211,19 @@ const Toast = {
 
 // ===== API Service =====
 const ApiService = {
-    baseUrl: 'https://gw2.wishingstarmoye.com/gw2api',
+    // 直接API地址（默认）
+    directBaseUrl: 'https://gw2.wishingstarmoye.com/gw2api',
+    // Worker代理地址（如果有部署Worker，请修改此处）
+    workerBaseUrl: '', // 例如: 'https://gw2-toolbox.your-account.workers.dev'
     cacheDuration: 5 * 60 * 1000,
+
+    get baseUrl() {
+        // 如果配置了Worker地址且当前是同源或Worker地址，则使用Worker
+        if (this.workerBaseUrl) {
+            return this.workerBaseUrl;
+        }
+        return this.directBaseUrl;
+    },
 
     async fetchDaily(force = false) {
         const now = Date.now();

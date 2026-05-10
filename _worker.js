@@ -1,9 +1,9 @@
-// Cloudflare Worker for GW2 Toolbox
+// Cloudflare Worker for GW2 Toolbox (Pages Function)
 // 提供 API 代理和 KV 数据持久化
-// 注意：此 Worker 仅提供 API 服务，不包含静态文件
+// 静态文件由 Cloudflare Pages 自动处理
 
 // API 缓存配置
-const CACHE_DURATION = 5 * 60; // 5分钟(秒)
+const CACHE_DURATION = 5 * 60; // 5分钟 (秒)
 
 // 响应头
 const JSON_HEADERS = {
@@ -122,16 +122,8 @@ export default {
       }
     }
 
-    // 返回 API 信息
-    return new Response(JSON.stringify({
-      code: 200,
-      msg: 'GW2 Toolbox API Server',
-      endpoints: {
-        daily: '/api/daily',
-        activity: '/api/activity',
-        data: '/api/data/{userId}'
-      },
-      note: 'This Worker only provides API services. Please deploy frontend files to Pages/Vercel/Netlify.'
-    }), { headers: JSON_HEADERS });
+    // 对于非 API 请求，返回静态文件（由 Pages 自动处理）
+    // 如果 Pages 没有处理，返回 404
+    return new Response('Not Found', { status: 404 });
   }
 };
