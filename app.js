@@ -6,8 +6,49 @@
 // ===== Storage Layer =====
 const Storage = {
     prefix: 'gw2_toolbox_v2_',
+    cloudEnabled: false,
+    userToken: null,
 
-    get(key) {
+    init() {
+        this.userToken = localStorage.getItem('gw2_cloud_token');
+        this.cloudEnabled = !!this.userToken && !!ApiService.workerBaseUrl;
+    },
+
+    setToken(token) {
+        this.userToken = token;
+        if (token) {
+            localStorage.setItem('gw2_cloud_token', token);
+        } else {
+            localStorage.removeItem('gw2_cloud_token');
+        }
+        this.cloudEnabled = !!token && !!ApiService.workerBaseUrl;
+    },
+
+    getCloudUrl(key) {
+        if (!this.userToken || !ApiService.workerBaseUrl) return null;
+        return `${ApiService.workerBaseUrl}/api/data/${key}?token=${encodeURIComponent(this.userToken)}`;
+    },
+
+    async get(key) {
+        // Try cloud first if enabled
+        if (this.cloudEnabled) {
+            try {
+                const url = this.getCloudUrl(key);
+                const response = await fetch(url);
+                if (response.ok) {
+                    const result = await response.json();
+                    if (result.data !== null) {
+                        // Sync to local as cache
+                        localStorage.setItem(this.prefix + key, JSON.stringify(result.data));
+                        return result.data;
+                    }
+                }
+            } catch (e) {
+                console.warn('Cloud get failed, falling back to local:', e);
+            }
+        }
+
+        // Fallback to localStorage
         try {
             const data = localStorage.getItem(this.prefix + key);
             return data ? JSON.parse(data) : null;
@@ -17,18 +58,64 @@ const Storage = {
         }
     },
 
-    set(key, value) {
+    async set(key, value) {
+        // Always save to localStorage as cache/backup
         try {
             localStorage.setItem(this.prefix + key, JSON.stringify(value));
-            return true;
         } catch (e) {
-            console.error('Storage write error:', e);
-            return false;
+            console.error('Local storage write error:', e);
         }
+
+        // Sync to cloud if enabled
+        if (this.cloudEnabled) {
+            try {
+                const url = this.getCloudUrl(key);
+                const response = await fetch(url, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(value),
+                });
+                return response.ok;
+            } catch (e) {
+                console.warn('Cloud sync failed:', e);
+                return false;
+            }
+        }
+
+        return true;
     },
 
     remove(key) {
         localStorage.removeItem(this.prefix + key);
+        if (this.cloudEnabled) {
+            try {
+                const url = this.getCloudUrl(key);
+                fetch(url, { method: 'DELETE' }).catch(() => {});
+            } catch (e) {
+                console.warn('Cloud delete failed:', e);
+            }
+        }
+    },
+
+    async syncAll() {
+        if (!this.cloudEnabled) return;
+
+        const keys = ['projects', 'trades', 'todos', 'daily_progress', 'theme', 'daily_preview_type'];
+        for (const key of keys) {
+            const value = this.getLocal(key);
+            if (value !== null) {
+                await this.set(key, value);
+            }
+        }
+    },
+
+    getLocal(key) {
+        try {
+            const data = localStorage.getItem(this.prefix + key);
+            return data ? JSON.parse(data) : null;
+        } catch (e) {
+            return null;
+        }
     }
 };
 
@@ -213,16 +300,28 @@ const Toast = {
 const ApiService = {
     // 直接API地址（默认）
     directBaseUrl: 'https://gw2.wishingstarmoye.com/gw2api',
-    // Worker代理地址（如果有部署Worker，请修改此处）
-    workerBaseUrl: '', // 例如: 'https://gw2-toolbox.your-account.workers.dev'
+    // Worker代理地址（自动检测或从配置读取）
+    workerBaseUrl: localStorage.getItem('gw2_worker_url') || '',
     cacheDuration: 5 * 60 * 1000,
 
     get baseUrl() {
         // 如果配置了Worker地址且当前是同源或Worker地址，则使用Worker
         if (this.workerBaseUrl) {
-            return this.workerBaseUrl;
+            return this.workerBaseUrl + '/gw2api';
         }
         return this.directBaseUrl;
+    },
+
+    setWorkerUrl(url) {
+        if (url) {
+            // Remove trailing slash
+            url = url.replace(/\/$/, '');
+            localStorage.setItem('gw2_worker_url', url);
+        } else {
+            localStorage.removeItem('gw2_worker_url');
+        }
+        this.workerBaseUrl = url || '';
+        Storage.init();
     },
 
     async fetchDaily(force = false) {
@@ -1824,7 +1923,29 @@ const DataManager = {
         document.getElementById('importBtn').addEventListener('click', () => this.import());
     },
 
-    export() {
+    async export() {
+        // Try cloud export first if enabled
+        if (Storage.cloudEnabled) {
+            try {
+                const url = `${ApiService.workerBaseUrl}/api/export?token=${encodeURIComponent(Storage.userToken)}`;
+                const response = await fetch(url);
+                if (response.ok) {
+                    const data = await response.json();
+                    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+                    const urlObj = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = urlObj;
+                    a.download = `gw2_toolbox_backup_${Utils.getTodayKey()}.json`;
+                    a.click();
+                    URL.revokeObjectURL(urlObj);
+                    Toast.show('云端数据已导出');
+                    return;
+                }
+            } catch (e) {
+                console.warn('Cloud export failed, falling back to local:', e);
+            }
+        }
+
         const data = {
             projects: AppState.projects,
             trades: AppState.trades,
@@ -1847,28 +1968,28 @@ const DataManager = {
         const input = document.createElement('input');
         input.type = 'file';
         input.accept = '.json';
-        input.onchange = (e) => {
+        input.onchange = async (e) => {
             const file = e.target.files[0];
             if (!file) return;
             const reader = new FileReader();
-            reader.onload = (event) => {
+            reader.onload = async (event) => {
                 try {
                     const data = JSON.parse(event.target.result);
                     if (data.projects) {
                         AppState.projects = data.projects;
-                        Storage.set('projects', AppState.projects);
+                        await Storage.set('projects', AppState.projects);
                     }
                     if (data.trades) {
                         AppState.trades = data.trades;
-                        Storage.set('trades', AppState.trades);
+                        await Storage.set('trades', AppState.trades);
                     }
                     if (data.todos) {
                         AppState.todos = data.todos;
-                        Storage.set('todos', AppState.todos);
+                        await Storage.set('todos', AppState.todos);
                     }
                     if (data.dailyProgress) {
                         AppState.dailyProgress = data.dailyProgress;
-                        Storage.set('daily_progress', AppState.dailyProgress);
+                        await Storage.set('daily_progress', AppState.dailyProgress);
                     }
                     Dashboard.updateStats();
                     Crafting.renderProjectList();
@@ -1888,17 +2009,24 @@ const DataManager = {
 // ===== Authentication & User Management =====
 const Auth = {
     currentUser: null,
-    users: Storage.get('system_users') || [],
-    settings: Storage.get('system_settings') || { allowRegister: true },
+    users: [],
+    settings: { allowRegister: true },
 
-    init() {
+    async init() {
+        // Initialize storage first
+        Storage.init();
+
+        // Load from storage (async)
+        this.users = await Storage.get('system_users') || [];
+        this.settings = await Storage.get('system_settings') || { allowRegister: true };
+
         // Create admin user if none exists
         if (this.users.length === 0) {
             this.register('admin', 'admin123', 'admin');
         }
 
         // Check for saved login
-        const savedUser = Storage.get('current_user');
+        const savedUser = await Storage.get('current_user');
         if (savedUser) {
             this.currentUser = savedUser;
             this.showApp();
@@ -1924,6 +2052,90 @@ const Auth = {
         document.getElementById('brandHome').addEventListener('click', () => {
             Navigation.navigate('dashboard');
         });
+
+        // Cloud sync settings
+        this.initCloudSettings();
+    },
+
+    initCloudSettings() {
+        // Add cloud config UI if not exists
+        const authPanel = document.querySelector('.auth-panel');
+        if (authPanel && !document.getElementById('cloudConfig')) {
+            const cloudDiv = document.createElement('div');
+            cloudDiv.id = 'cloudConfig';
+            cloudDiv.style.cssText = 'margin-top:16px;padding-top:16px;border-top:1px solid var(--border);';
+            cloudDiv.innerHTML = `
+                <div style="font-size:12px;color:var(--text-muted);margin-bottom:8px;text-align:center;">云端同步配置（可选）</div>
+                <input type="text" class="auth-input" id="cloudWorkerUrl" placeholder="Worker 地址，如: https://gw2-toolbox.xxx.workers.dev" style="margin-bottom:8px;">
+                <input type="text" class="auth-input" id="cloudToken" placeholder="同步令牌（任意字符串）" style="margin-bottom:8px;">
+                <div style="display:flex;gap:8px;">
+                    <button class="auth-btn" id="saveCloudBtn" style="flex:1;font-size:12px;padding:8px;">保存配置</button>
+                    <button class="auth-btn" id="clearCloudBtn" style="flex:1;font-size:12px;padding:8px;background:var(--bg-hover);color:var(--text-secondary);">清除</button>
+                </div>
+                <div id="cloudStatus" style="font-size:11px;margin-top:6px;text-align:center;color:var(--text-muted);"></div>
+            `;
+            authPanel.appendChild(cloudDiv);
+
+            // Load saved values
+            const savedUrl = localStorage.getItem('gw2_worker_url') || '';
+            const savedToken = localStorage.getItem('gw2_cloud_token') || '';
+            document.getElementById('cloudWorkerUrl').value = savedUrl;
+            document.getElementById('cloudToken').value = savedToken;
+
+            this.updateCloudStatus();
+
+            document.getElementById('saveCloudBtn').addEventListener('click', async () => {
+                const url = document.getElementById('cloudWorkerUrl').value.trim();
+                const token = document.getElementById('cloudToken').value.trim();
+
+                if (url) {
+                    ApiService.setWorkerUrl(url);
+                }
+                if (token) {
+                    Storage.setToken(token);
+                }
+
+                // Test connection
+                if (url && token) {
+                    try {
+                        const testUrl = `${url}/api/data/test?token=${encodeURIComponent(token)}`;
+                        const response = await fetch(testUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '"ping"' });
+                        if (response.ok) {
+                            Toast.show('云端同步已启用', 'success');
+                            this.updateCloudStatus('已连接');
+                        } else {
+                            Toast.show('连接失败，请检查地址和令牌', 'error');
+                            this.updateCloudStatus('连接失败');
+                        }
+                    } catch (e) {
+                        Toast.show('连接失败: ' + e.message, 'error');
+                        this.updateCloudStatus('连接失败');
+                    }
+                }
+            });
+
+            document.getElementById('clearCloudBtn').addEventListener('click', () => {
+                ApiService.setWorkerUrl('');
+                Storage.setToken(null);
+                document.getElementById('cloudWorkerUrl').value = '';
+                document.getElementById('cloudToken').value = '';
+                this.updateCloudStatus('未配置');
+                Toast.show('云端配置已清除');
+            });
+        }
+    },
+
+    updateCloudStatus(status) {
+        const el = document.getElementById('cloudStatus');
+        if (!el) return;
+        if (status) {
+            el.textContent = '状态: ' + status;
+            el.style.color = status === '已连接' ? 'var(--success)' : 'var(--danger)';
+        } else {
+            const hasConfig = !!localStorage.getItem('gw2_worker_url');
+            el.textContent = hasConfig ? '状态: 已配置' : '状态: 未配置';
+            el.style.color = 'var(--text-muted)';
+        }
     },
 
     updateAuthUI() {
@@ -1971,12 +2183,12 @@ const Auth = {
         }
     },
 
-    login(username, password) {
+    async login(username, password) {
         const user = this.users.find(u => u.username === username && u.password === password);
         if (user) {
             this.currentUser = user;
-            Storage.set('current_user', user);
-            this.loadUserData();
+            await Storage.set('current_user', user);
+            await this.loadUserData();
             this.showApp();
             Toast.show(`欢迎回来，${user.username}`);
         } else {
@@ -1985,7 +2197,7 @@ const Auth = {
         }
     },
 
-    register(username, password, role = 'user') {
+    async register(username, password, role = 'user') {
         if (this.users.some(u => u.username === username)) {
             const errorEl = document.getElementById('authError');
             if (errorEl) {
@@ -2004,7 +2216,7 @@ const Auth = {
         };
 
         this.users.push(user);
-        Storage.set('system_users', this.users);
+        await Storage.set('system_users', this.users);
 
         if (role === 'admin') {
             return true; // Silent admin creation
@@ -2018,8 +2230,8 @@ const Auth = {
         return true;
     },
 
-    logout() {
-        this.saveUserData();
+    async logout() {
+        await this.saveUserData();
         Storage.remove('current_user');
         this.currentUser = null;
         document.getElementById('appHeader').style.display = 'none';
@@ -2059,25 +2271,25 @@ const Auth = {
         Navigation.navigate(hash, false);
     },
 
-    loadUserData() {
+    async loadUserData() {
         if (!this.currentUser) return;
         const userKey = `user_${this.currentUser.id}_`;
-        AppState.projects = Storage.get(userKey + 'projects') || [];
-        AppState.trades = Storage.get(userKey + 'trades') || [];
-        AppState.todos = Storage.get(userKey + 'todos') || [];
-        AppState.dailyProgress = Storage.get(userKey + 'daily_progress') || {};
+        AppState.projects = await Storage.get(userKey + 'projects') || [];
+        AppState.trades = await Storage.get(userKey + 'trades') || [];
+        AppState.todos = await Storage.get(userKey + 'todos') || [];
+        AppState.dailyProgress = await Storage.get(userKey + 'daily_progress') || {};
     },
 
-    saveUserData() {
+    async saveUserData() {
         if (!this.currentUser) return;
         const userKey = `user_${this.currentUser.id}_`;
-        Storage.set(userKey + 'projects', AppState.projects);
-        Storage.set(userKey + 'trades', AppState.trades);
-        Storage.set(userKey + 'todos', AppState.todos);
-        Storage.set(userKey + 'daily_progress', AppState.dailyProgress);
+        await Storage.set(userKey + 'projects', AppState.projects);
+        await Storage.set(userKey + 'trades', AppState.trades);
+        await Storage.set(userKey + 'todos', AppState.todos);
+        await Storage.set(userKey + 'daily_progress', AppState.dailyProgress);
     },
 
-    addUser() {
+    async addUser() {
         const username = document.getElementById('newUserName').value.trim();
         const password = document.getElementById('newUserPassword').value.trim();
         const role = this.getSegmentValue('newUserRoleControl') || 'user';
@@ -2087,7 +2299,7 @@ const Auth = {
             return;
         }
 
-        const success = this.register(username, password, role);
+        const success = await this.register(username, password, role);
         if (success) {
             Admin.renderUserList();
             document.getElementById('newUserName').value = '';
@@ -2096,18 +2308,18 @@ const Auth = {
         }
     },
 
-    deleteUser(userId) {
+    async deleteUser(userId) {
         if (userId === this.currentUser.id) {
             Toast.show('不能删除当前登录用户', 'error');
             return;
         }
         this.users = this.users.filter(u => u.id !== userId);
-        Storage.set('system_users', this.users);
+        await Storage.set('system_users', this.users);
         Admin.renderUserList();
         Toast.show('用户已删除');
     },
 
-    updateAdminInfo() {
+    async updateAdminInfo() {
         const newName = document.getElementById('adminNameInput').value.trim();
         const newPass = document.getElementById('adminPassInput').value.trim();
 
@@ -2130,9 +2342,9 @@ const Auth = {
             admin.password = newPass;
         }
 
-        Storage.set('system_users', this.users);
+        await Storage.set('system_users', this.users);
         this.currentUser = admin;
-        Storage.set('current_user', admin);
+        await Storage.set('current_user', admin);
 
         // Update UI
         document.getElementById('userName').textContent = admin.username;
@@ -2167,9 +2379,9 @@ const Admin = {
         const toggle = document.getElementById('registerToggle');
         if (toggle) {
             toggle.checked = Auth.settings.allowRegister;
-            toggle.addEventListener('change', () => {
+            toggle.addEventListener('change', async () => {
                 Auth.settings.allowRegister = toggle.checked;
-                Storage.set('system_settings', Auth.settings);
+                await Storage.set('system_settings', Auth.settings);
                 Auth.updateAuthUI();
                 Toast.show(toggle.checked ? '注册功能已开启' : '注册功能已关闭');
             });
@@ -2221,10 +2433,10 @@ const Admin = {
 };
 
 // ===== Initialization =====
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
     Theme.init();
     Toast.init();
-    Auth.init();
+    await Auth.init();
     Navigation.init();
     DataManager.init();
     Reminder.init();
@@ -2256,9 +2468,9 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     // Auto-save user data periodically
-    setInterval(() => {
+    setInterval(async () => {
         if (Auth.currentUser) {
-            Auth.saveUserData();
+            await Auth.saveUserData();
         }
     }, 30000);
 });

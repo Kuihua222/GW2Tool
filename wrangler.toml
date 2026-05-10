@@ -1,0 +1,9 @@
+name = "gw2-toolbox"
+main = "src/index.js"
+compatibility_date = "2025-05-01"
+
+# Workers KV 命名空间绑定
+# 部署后自动创建，无需手动配置
+[[kv_namespaces]]
+binding = "GW2_DATA"
+id = ""
