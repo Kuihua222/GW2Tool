@@ -3,7 +3,7 @@ main = "index.js"
 compatibility_date = "2024-01-01"
 
 kv_namespaces = [
-  { binding = "GW2_DATA", id = "33d17db1ec9a4054be429822a89500a8" }
+  { binding = "KV"", id = "318ae33873514cf38f82f9e65810f583" }
 ]
 
 [assets]
