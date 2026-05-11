@@ -1,102 +1,38 @@
 /**
  * GW2 Toolbox - Cloudflare Worker
- * 提供 KV 数据持久化和 API 服务
  */
 
 const HEADER_TOKEN = "x-gw2-token";
 const KV_DATA_PREFIX = "gw2_data_";
 
-// 内联的静态资源，用于快速部署
-const STATIC_FILES = {
-  'index.html': '',
-  'app.js': '',
-  'styles.css': ''
-};
-
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
     const path = url.pathname;
 
-    // API 路由处理
+    // API 请求
     if (path.startsWith("/api/")) {
-      return await handleAPI(request, env);
+      return handleAPI(request, env);
     }
 
-    // 静态资源处理
-    return await handleStatic(request, env);
+    // 静态文件 - 让 wrangler 自动处理
+    return env.ASSETS.fetch(request);
   }
 };
 
 /**
- * 处理静态资源请求
- */
-async function handleStatic(request, env) {
-  const url = new URL(request.url);
-  let path = url.pathname;
-
-  // 默认路由到 index.html
-  if (path === "/" || path === "") {
-    path = "/index.html";
-  }
-
-  // 去除前导斜杠
-  const filePath = path.startsWith("/") ? path.slice(1) : path;
-
-  // 尝试从 __STATIC_CONTENT 获取（wrangler site）
-  try {
-    if (typeof __STATIC_CONTENT !== 'undefined') {
-      const content = await __STATIC_CONTENT.get(filePath);
-      if (content) {
-        return new Response(content, {
-          headers: {
-            'Content-Type': getContentType(filePath),
-            'Cache-Control': 'public, max-age=3600'
-          }
-        });
-      }
-    }
-  } catch (e) {
-    // 继续尝试其他方法
-  }
-
-  // 如果找不到，返回 404
-  return new Response("Not Found", { status: 404 });
-}
-
-/**
- * 根据文件扩展名获取 MIME 类型
- */
-function getContentType(path) {
-  const ext = path.split('.').pop().toLowerCase();
-  const types = {
-    'html': 'text/html; charset=utf-8',
-    'css': 'text/css; charset=utf-8',
-    'js': 'application/javascript; charset=utf-8',
-    'json': 'application/json; charset=utf-8',
-    'png': 'image/png',
-    'jpg': 'image/jpeg',
-    'jpeg': 'image/jpeg',
-    'gif': 'image/gif',
-    'svg': 'image/svg+xml',
-    'ico': 'image/x-icon'
-  };
-  return types[ext] || 'application/octet-stream';
-}
-
-/**
- * API 路由处理
+ * API 处理
  */
 async function handleAPI(request, env) {
   const url = new URL(request.url);
   const path = url.pathname;
 
-  // 认证相关路由（不需要 token）
+  // 认证路由（无需 token）
   if (path === "/api/auth") {
-    return await handleAuth(request, env);
+    return handleAuth(request, env);
   }
 
-  // 检查认证 token
+  // 验证 token
   const token = request.headers.get(HEADER_TOKEN);
   if (!token) {
     return jsonResponse({ error: "Unauthorized" }, 401);
@@ -107,25 +43,25 @@ async function handleAPI(request, env) {
     return jsonResponse({ error: "Invalid token" }, 401);
   }
 
-  // 数据相关路由
+  // 数据路由
   if (path === "/api/data" && request.method === "GET") {
-    return await getAllData(env);
+    return getAllData(env);
   }
 
   if (path === "/api/export") {
-    return await exportAllData(env);
+    return exportAllData(env);
   }
 
   if (path.startsWith("/api/data/")) {
     const key = path.substring("/api/data/".length);
-    return await handleDataRequest(request, env, key);
+    return handleDataRequest(request, env, key);
   }
 
   return jsonResponse({ error: "Not found" }, 404);
 }
 
 /**
- * 处理认证请求
+ * 认证处理
  */
 async function handleAuth(request, env) {
   if (request.method !== "POST") {
@@ -145,11 +81,9 @@ async function handleAuth(request, env) {
     return jsonResponse({ error: "Password required" }, 400);
   }
 
-  // 检查密码是否已设置
   const storedHash = await env.KV.get("gw2_password_hash");
 
   if (action === "setup") {
-    // 设置初始密码
     if (storedHash) {
       return jsonResponse({ error: "Already configured" }, 403);
     }
@@ -164,7 +98,6 @@ async function handleAuth(request, env) {
   }
 
   if (action === "login" || action === "check") {
-    // 登录或验证
     if (!storedHash) {
       return jsonResponse({ exists: false });
     }
@@ -183,7 +116,7 @@ async function handleAuth(request, env) {
 }
 
 /**
- * 处理数据请求
+ * 数据请求处理
  */
 async function handleDataRequest(request, env, key) {
   const fullKey = KV_DATA_PREFIX + key;
@@ -248,7 +181,7 @@ async function getAllData(env) {
 }
 
 /**
- * 导出所有数据
+ * 导出数据
  */
 async function exportAllData(env) {
   const keys = ["projects", "trades", "todos", "daily_progress", "theme", "daily_preview_type"];
@@ -278,7 +211,7 @@ async function exportAllData(env) {
 }
 
 /**
- * 工具函数：返回 JSON 响应
+ * 工具函数
  */
 function jsonResponse(data, status = 200) {
   return new Response(JSON.stringify(data), {
@@ -287,9 +220,6 @@ function jsonResponse(data, status = 200) {
   });
 }
 
-/**
- * 密码哈希（使用 SHA-256 + salt）
- */
 async function hashPassword(password) {
   const salt = "gw2_salt_2024_secure";
   const encoder = new TextEncoder();
@@ -299,26 +229,17 @@ async function hashPassword(password) {
   return hashArray.map(b => b.toString(16).padStart(2, "0")).join("");
 }
 
-/**
- * 验证密码
- */
 async function verifyPassword(password, storedHash) {
   const hash = await hashPassword(password);
   return hash === storedHash;
 }
 
-/**
- * 生成随机 token
- */
 function generateToken() {
   const array = new Uint8Array(32);
   crypto.getRandomValues(array);
   return Array.from(array).map(b => b.toString(16).padStart(2, "0")).join("");
 }
 
-/**
- * 验证 token
- */
 async function verifyToken(token, env) {
   if (!token || token.length !== 64) return false;
   const key = `gw2_token_${token}`;
@@ -326,9 +247,6 @@ async function verifyToken(token, env) {
   return exists === "valid";
 }
 
-/**
- * 存储 token（有效期 30 天）
- */
 async function storeToken(token, env) {
   const key = `gw2_token_${token}`;
   await env.KV.put(key, "valid", { expirationTtl: 60 * 60 * 24 * 30 });
