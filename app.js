@@ -1,133 +1,98 @@
 /**
  * GW2 Toolbox - Complete Application Logic
  * Features: Daily checklists, Crafting with material tracking, Trading, Todo
+ * Refactored for Cloudflare Workers with KV persistence
  */
 
-// ===== Storage Layer =====
+const API_BASE = '';
+const HEADER_TOKEN = 'x-gw2-token';
+
 const Storage = {
-    prefix: 'gw2_toolbox_v2_',
-    cloudEnabled: false,
-    userToken: null,
-    currentUserId: null,
+    token: localStorage.getItem('gw2_token'),
+    cache: {},
 
-    init() {
-        this.cloudEnabled = false;
+    isConfigured() {
+        return !!this.token;
     },
 
-    setToken(token, userId) {
-        this.userToken = token;
-        this.currentUserId = userId;
-        this.cloudEnabled = !!token;
-    },
-
-    clearToken() {
-        this.userToken = null;
-        this.currentUserId = null;
-        this.cloudEnabled = false;
-    },
-
-    // 自动添加用户前缀，实现数据隔离
-    getUserKey(key) {
-        // 系统级数据（用户列表、设置）不加用户前缀
-        const systemKeys = ['system_users', 'system_settings', 'current_user'];
-        if (systemKeys.includes(key)) return key;
-        // 用户数据加前缀
-        if (this.currentUserId) {
-            return `user_${this.currentUserId}_${key}`;
+    setToken(token) {
+        this.token = token;
+        if (token) {
+            localStorage.setItem('gw2_token', token);
+        } else {
+            localStorage.removeItem('gw2_token');
         }
-        return key;
-    },
-
-    getCloudUrl(key) {
-        if (!this.userToken) return null;
-        const userKey = this.getUserKey(key);
-        return `/api/data/${userKey}?token=${encodeURIComponent(this.userToken)}`;
     },
 
     async get(key) {
-        const userKey = this.getUserKey(key);
-
-        // Try cloud first if enabled
-        if (this.cloudEnabled) {
-            try {
-                const url = this.getCloudUrl(key);
-                const response = await fetch(url);
-                if (response.ok) {
-                    const result = await response.json();
-                    if (result.data !== null) {
-                        localStorage.setItem(this.prefix + userKey, JSON.stringify(result.data));
-                        return result.data;
-                    }
-                }
-            } catch (e) {
-                console.warn('Cloud get failed, falling back to local:', e);
-            }
+        if (this.cache[key] !== undefined) {
+            return this.cache[key];
         }
 
-        // Fallback to localStorage
+        if (!this.token) {
+            const local = localStorage.getItem('gw2_' + key);
+            return local ? JSON.parse(local) : null;
+        }
+
         try {
-            const data = localStorage.getItem(this.prefix + userKey);
-            return data ? JSON.parse(data) : null;
+            const response = await fetch(`${API_BASE}/api/data/${key}`, {
+                headers: { [HEADER_TOKEN]: this.token }
+            });
+            if (response.ok) {
+                const result = await response.json();
+                this.cache[key] = result.data;
+                if (result.data !== null) {
+                    localStorage.setItem('gw2_' + key, JSON.stringify(result.data));
+                }
+                return result.data;
+            }
         } catch (e) {
-            console.error('Storage read error:', e);
-            return null;
+            console.warn('Storage get failed, using local:', e);
         }
+
+        const local = localStorage.getItem('gw2_' + key);
+        return local ? JSON.parse(local) : null;
     },
 
     async set(key, value) {
-        const userKey = this.getUserKey(key);
+        this.cache[key] = value;
+        localStorage.setItem('gw2_' + key, JSON.stringify(value));
 
-        // Always save to localStorage as cache/backup
+        if (!this.token) return true;
+
         try {
-            localStorage.setItem(this.prefix + userKey, JSON.stringify(value));
+            const response = await fetch(`${API_BASE}/api/data/${key}`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    [HEADER_TOKEN]: this.token
+                },
+                body: JSON.stringify(value)
+            });
+            return response.ok;
         } catch (e) {
-            console.error('Local storage write error:', e);
+            console.warn('Storage set failed:', e);
+            return false;
         }
-
-        // Sync to cloud if enabled
-        if (this.cloudEnabled) {
-            try {
-                const url = this.getCloudUrl(key);
-                const response = await fetch(url, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(value),
-                });
-                return response.ok;
-            } catch (e) {
-                console.warn('Cloud sync failed:', e);
-                return false;
-            }
-        }
-
-        return true;
     },
 
     remove(key) {
-        const userKey = this.getUserKey(key);
-        localStorage.removeItem(this.prefix + userKey);
-        if (this.cloudEnabled) {
-            try {
-                const url = this.getCloudUrl(key);
-                fetch(url, { method: 'DELETE' }).catch(() => {});
-            } catch (e) {
-                console.warn('Cloud delete failed:', e);
-            }
-        }
+        delete this.cache[key];
+        localStorage.removeItem('gw2_' + key);
+
+        if (!this.token) return;
+
+        fetch(`${API_BASE}/api/data/${key}`, {
+            method: 'DELETE',
+            headers: { [HEADER_TOKEN]: this.token }
+        }).catch(() => {});
     },
 
-    getLocal(key) {
-        const userKey = this.getUserKey(key);
-        try {
-            const data = localStorage.getItem(this.prefix + userKey);
-            return data ? JSON.parse(data) : null;
-        } catch (e) {
-            return null;
-        }
+    clearCache() {
+        this.cache = {};
     }
 };
 
-// ===== State Management =====
 const AppState = {
     currentPage: 'dashboard',
     currentProjectId: null,
@@ -141,22 +106,13 @@ const AppState = {
     timerData: null,
     lastDailyFetch: 0,
     lastActivityFetch: 0,
-    lastTimerFetch: 0,
-
-    async init() {
-        this.projects = await Storage.get('projects') || [];
-        this.trades = await Storage.get('trades') || [];
-        this.todos = await Storage.get('todos') || [];
-        this.dailyProgress = await Storage.get('daily_progress') || {};
-    }
+    lastTimerFetch: 0
 };
 
-// ===== Theme Manager =====
 const Theme = {
     current: 'auto',
 
-    async init() {
-        this.current = await Storage.get('theme') || 'auto';
+    init() {
         this.apply();
         document.getElementById('themeToggle')?.addEventListener('click', () => this.toggle());
     },
@@ -166,11 +122,9 @@ const Theme = {
         let theme = this.current;
 
         if (theme === 'auto') {
-            // Follow system preference or time (6:00 - 18:00 = light)
             const hour = new Date().getHours();
             const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
             theme = (hour >= 6 && hour < 18) ? 'light' : 'dark';
-            // If system explicitly prefers dark, respect it
             if (prefersDark && hour >= 6 && hour < 18) {
                 theme = 'dark';
             }
@@ -181,7 +135,6 @@ const Theme = {
 
     toggle() {
         const html = document.documentElement;
-        // Cycle: auto -> light -> dark -> auto
         const cycle = ['auto', 'light', 'dark'];
         const currentIndex = cycle.indexOf(this.current);
         const nextIndex = (currentIndex + 1) % cycle.length;
@@ -206,7 +159,6 @@ const Theme = {
     }
 };
 
-// ===== Utilities =====
 const Utils = {
     uuid() {
         return Date.now().toString(36) + Math.random().toString(36).substr(2, 9);
@@ -285,7 +237,6 @@ const Utils = {
     }
 };
 
-// ===== Toast Notifications =====
 const Toast = {
     container: null,
 
@@ -312,16 +263,12 @@ const Toast = {
     }
 };
 
-// ===== API Service =====
 const ApiService = {
-    // 直接API地址（默认）
     directBaseUrl: 'https://gw2.wishingstarmoye.com/gw2api',
-    // 同域部署时自动使用当前域名
     cacheDuration: 5 * 60 * 1000,
 
     get baseUrl() {
-        // 同域部署：直接使用 /gw2api 路径
-        return '/gw2api';
+        return this.directBaseUrl;
     },
 
     async fetchDaily(force = false) {
@@ -405,7 +352,6 @@ const ApiService = {
     }
 };
 
-// ===== Navigation =====
 const Navigation = {
     init() {
         document.querySelectorAll('[data-page]').forEach(el => {
@@ -457,7 +403,6 @@ const Navigation = {
         document.getElementById('mobileDrawer').classList.remove('open');
         window.scrollTo({ top: 0, behavior: 'smooth' });
 
-        // Wait for DOM to be ready
         await new Promise(resolve => setTimeout(resolve, 50));
         this.loadPageData(page);
     },
@@ -474,10 +419,9 @@ const Navigation = {
     }
 };
 
-// ===== Dashboard =====
 const Dashboard = {
     loaded: false,
-    previewType: Storage.get('daily_preview_type') || 'fractal',
+    previewType: 'fractal',
 
     async load() {
         if (!this.loaded) {
@@ -490,7 +434,6 @@ const Dashboard = {
     },
 
     bindEvents() {
-        // Segmented control for daily preview type
         const typeControl = document.getElementById('dailyPreviewTypeControl');
         if (typeControl) {
             typeControl.querySelectorAll('.segment-btn').forEach(btn => {
@@ -558,7 +501,7 @@ const Dashboard = {
                 if (type === 'fractal') {
                     const recommended = items.filter(i => i.includes('-'));
                     const daily = items.filter(i => !i.includes('-'));
-                    
+
                     if (recommended.length > 0) {
                         html += '<div class="fractal-group">';
                         html += '<div class="fractal-group-title">推荐碎层</div>';
@@ -611,7 +554,6 @@ const Dashboard = {
                         html += '</div></div>';
                     }
                 } else {
-                    // For raid
                     html += '<div class="daily-list">';
                     items.forEach(item => {
                         const key = `${type}_${item}`;
@@ -682,8 +624,6 @@ const Dashboard = {
         });
     },
 
-
-
     async loadActivityPreview(force = false) {
         const container = document.getElementById('activityPreview');
         const badge = document.getElementById('activityPreviewBadge');
@@ -737,7 +677,6 @@ const Dashboard = {
     }
 };
 
-// ===== Daily (with checkboxes) =====
 const Daily = {
     loaded: false,
 
@@ -763,7 +702,6 @@ const Daily = {
             const todayKey = Utils.getTodayKey();
             const progress = AppState.dailyProgress[todayKey] || {};
 
-            // Render Fractals
             if (dailyData.fractal && dailyData.fractal.length > 0) {
                 const recommended = dailyData.fractal.filter(f => f.includes('-'));
                 const dailies = dailyData.fractal.filter(f => !f.includes('-'));
@@ -796,7 +734,6 @@ const Daily = {
                 if (fractalContainer) fractalContainer.innerHTML = '<div class="empty-small">暂无碎层数据</div>';
             }
 
-            // Render Raids
             if (dailyData.raid && dailyData.raid.length > 0) {
                 let html = '<div class="daily-list">';
                 dailyData.raid.forEach(item => {
@@ -809,10 +746,8 @@ const Daily = {
                 if (strikeContainer) strikeContainer.innerHTML = '<div class="empty-small">暂无进攻任务数据</div>';
             }
 
-            // Render Activities
             this.renderActivities(activityData, activityContainer);
 
-            // Bind check events
             this.bindCheckEvents();
 
         } catch (error) {
@@ -914,14 +849,12 @@ const Daily = {
 
                 Storage.set('daily_progress', AppState.dailyProgress);
 
-                // Update UI
                 const item = check.closest('.daily-item, .strike-item');
                 if (item) {
                     item.classList.toggle('completed');
                     check.classList.toggle('checked');
                 }
 
-                // Update dashboard stats
                 Dashboard.updateStats();
                 Dashboard.loadDailyPreview();
             });
@@ -929,7 +862,6 @@ const Daily = {
     }
 };
 
-// ===== Crafting (with inventory tracking) =====
 const Crafting = {
     loaded: false,
 
@@ -1132,7 +1064,6 @@ const Crafting = {
 
         container.innerHTML = html;
 
-        // Bind events
         const nameInput = container.querySelector('.project-detail-name');
         if (nameInput) {
             nameInput.addEventListener('change', () => {
@@ -1264,7 +1195,6 @@ const Crafting = {
     }
 };
 
-// ===== Trading =====
 const Trading = {
     loaded: false,
     currentResult: null,
@@ -1293,7 +1223,6 @@ const Trading = {
                 Toast.show('选中记录已删除');
             });
 
-            // Auto-calculate on input
             ['tradeName', 'tradeQuantity', 'tradeFee', 'tradeSellPrice', 'tradeBuyPrice'].forEach(id => {
                 document.getElementById(id)?.addEventListener('input', Utils.debounce(() => this.calculate(), 200));
             });
@@ -1431,7 +1360,6 @@ const Trading = {
             `;
         }).join('');
 
-        // Bind click events
         container.querySelectorAll('.trade-check').forEach(el => {
             el.addEventListener('click', (e) => {
                 e.stopPropagation();
@@ -1446,7 +1374,6 @@ const Trading = {
     }
 };
 
-// ===== Todo =====
 const Todo = {
     loaded: false,
 
@@ -1460,7 +1387,6 @@ const Todo = {
             if (e.key === 'Enter') this.add();
         });
 
-        // Due date toggle
         const noDueToggle = document.getElementById('todoNoDueDate');
         const dueDateInput = document.getElementById('todoDueDate');
         if (noDueToggle && dueDateInput) {
@@ -1471,7 +1397,6 @@ const Todo = {
             });
         }
 
-        // Edit modal cancel
         document.getElementById('cancelEditTodo')?.addEventListener('click', () => {
             document.getElementById('editTodoModal').style.display = 'none';
         });
@@ -1479,7 +1404,6 @@ const Todo = {
             document.getElementById('editTodoModal').style.display = 'none';
         });
 
-        // Edit modal due date toggle
         const editNoDueToggle = document.getElementById('editTodoNoDueDate');
         const editDueDateInput = document.getElementById('editTodoDueDate');
         if (editNoDueToggle && editDueDateInput) {
@@ -1490,7 +1414,6 @@ const Todo = {
             });
         }
 
-        // Edit modal reminder toggle
         const editReminderToggle = document.getElementById('editTodoReminderToggle');
         const editReminderLabel = document.getElementById('editTodoReminderLabel');
         const editReminderCycleControl = document.getElementById('editTodoReminderCycleControl');
@@ -1502,7 +1425,6 @@ const Todo = {
             });
         }
 
-        // Edit modal reminder cycle segmented control
         if (editReminderCycleControl) {
             editReminderCycleControl.querySelectorAll('.segment-btn').forEach(btn => {
                 btn.addEventListener('click', () => {
@@ -1512,7 +1434,6 @@ const Todo = {
             });
         }
 
-        // Bind segmented controls
         ['todoCategoryControl', 'todoPriorityControl'].forEach(id => {
             const control = document.getElementById(id);
             if (control) {
@@ -1525,7 +1446,6 @@ const Todo = {
             }
         });
 
-        // Bind reminder toggle
         const reminderToggle = document.getElementById('todoReminderToggle');
         const reminderLabel = document.getElementById('todoReminderLabel');
         const reminderCycleControl = document.getElementById('todoReminderCycleControl');
@@ -1539,7 +1459,6 @@ const Todo = {
             });
         }
 
-        // Bind reminder cycle segmented control
         if (reminderCycleControl) {
             reminderCycleControl.querySelectorAll('.segment-btn').forEach(btn => {
                 btn.addEventListener('click', () => {
@@ -1558,8 +1477,14 @@ const Todo = {
             });
         });
 
-        // Check reminders on load
         Reminder.check();
+    },
+
+    getSegmentValue(controlId) {
+        const control = document.getElementById(controlId);
+        if (!control) return null;
+        const active = control.querySelector('.segment-btn.active');
+        return active ? active.dataset.value : null;
     },
 
     add() {
@@ -1569,11 +1494,11 @@ const Todo = {
             return;
         }
 
-        const category = Auth.getSegmentValue('todoCategoryControl') || 'general';
-        const priority = Auth.getSegmentValue('todoPriorityControl') || 'medium';
+        const category = this.getSegmentValue('todoCategoryControl') || 'general';
+        const priority = this.getSegmentValue('todoPriorityControl') || 'medium';
         const dueDate = document.getElementById('todoDueDate').value;
         const reminderEnabled = document.getElementById('todoReminderToggle')?.checked || false;
-        const reminderCycle = Auth.getSegmentValue('todoReminderCycleControl') || 'daily';
+        const reminderCycle = this.getSegmentValue('todoReminderCycleControl') || 'daily';
 
         const todo = {
             id: Utils.uuid(),
@@ -1708,7 +1633,6 @@ const Todo = {
         document.getElementById('editTodoDueDate').value = todo.dueDate || '';
         document.getElementById('editTodoNoDueDate').checked = !todo.dueDate;
 
-        // Set category
         const categoryControl = document.getElementById('editTodoCategoryControl');
         if (categoryControl) {
             categoryControl.querySelectorAll('.segment-btn').forEach(btn => {
@@ -1716,7 +1640,6 @@ const Todo = {
             });
         }
 
-        // Set priority
         const priorityControl = document.getElementById('editTodoPriorityControl');
         if (priorityControl) {
             priorityControl.querySelectorAll('.segment-btn').forEach(btn => {
@@ -1724,7 +1647,6 @@ const Todo = {
             });
         }
 
-        // Set reminder
         const reminderToggle = document.getElementById('editTodoReminderToggle');
         const reminderLabel = document.getElementById('editTodoReminderLabel');
         const reminderCycleControl = document.getElementById('editTodoReminderCycleControl');
@@ -1744,15 +1666,13 @@ const Todo = {
 
         document.getElementById('editTodoModal').style.display = 'flex';
 
-        // Save handler
         const saveBtn = document.getElementById('saveEditTodo');
         const saveHandler = () => {
             todo.text = document.getElementById('editTodoText').value.trim();
-            todo.category = Auth.getSegmentValue('editTodoCategoryControl') || todo.category;
-            todo.priority = Auth.getSegmentValue('editTodoPriorityControl') || todo.priority;
+            todo.category = this.getSegmentValue('editTodoCategoryControl') || todo.category;
+            todo.priority = this.getSegmentValue('editTodoPriorityControl') || todo.priority;
             todo.dueDate = document.getElementById('editTodoNoDueDate').checked ? '' : document.getElementById('editTodoDueDate').value;
 
-            // Reset due date notification if date changed
             if (todo.dueDate) {
                 const dueDate = new Date(todo.dueDate);
                 dueDate.setHours(23, 59, 59, 999);
@@ -1764,7 +1684,7 @@ const Todo = {
             }
 
             const reminderEnabled = document.getElementById('editTodoReminderToggle')?.checked || false;
-            const reminderCycle = Auth.getSegmentValue('editTodoReminderCycleControl') || 'daily';
+            const reminderCycle = this.getSegmentValue('editTodoReminderCycleControl') || 'daily';
             todo.reminder = reminderEnabled ? {
                 enabled: true,
                 cycle: reminderCycle,
@@ -1783,11 +1703,9 @@ const Todo = {
     }
 };
 
-// ===== Reminder System =====
 const Reminder = {
     init() {
-        // Check reminders periodically
-        setInterval(() => this.check(), 60000); // Every minute
+        setInterval(() => this.check(), 60000);
     },
 
     check() {
@@ -1798,7 +1716,6 @@ const Reminder = {
         AppState.todos.forEach(todo => {
             if (todo.completed) return;
 
-            // Check cycle reminders
             if (todo.reminder?.enabled) {
                 const reminder = todo.reminder;
                 if (this.shouldRemind(reminder.cycle, reminder.lastReminded, now)) {
@@ -1808,7 +1725,6 @@ const Reminder = {
                 }
             }
 
-            // Check due date reminders (separate from cycle reminders)
             if (todo.dueDate && !todo.dueDateNotified) {
                 const dueDate = new Date(todo.dueDate);
                 dueDate.setHours(23, 59, 59, 999);
@@ -1848,10 +1764,8 @@ const Reminder = {
 
     showNotification(todo, type) {
         const title = type === 'due' ? `截止日期提醒: ${todo.text}` : `循环提醒: ${todo.text}`;
-        // Toast notification
         Toast.show(title, type === 'due' ? 'error' : 'warning', 5000);
 
-        // Browser notification (if permitted)
         if ('Notification' in window && Notification.permission === 'granted') {
             new Notification('GW2 工具箱 - 待办提醒', {
                 body: title,
@@ -1868,12 +1782,10 @@ const Reminder = {
         return AppState.todos.filter(todo => {
             if (todo.completed) return false;
 
-            // Count cycle reminders
             if (todo.reminder?.enabled && this.shouldRemind(todo.reminder.cycle, todo.reminder.lastReminded, now)) {
                 return true;
             }
 
-            // Count overdue due dates
             if (todo.dueDate && !todo.dueDateNotified) {
                 const dueDate = new Date(todo.dueDate);
                 dueDate.setHours(23, 59, 59, 999);
@@ -1887,21 +1799,18 @@ const Reminder = {
     updateBadges() {
         const count = this.getPendingCount();
 
-        // Dashboard stat card badge
         const dashboardBadge = document.getElementById('dashboardTodoBadge');
         if (dashboardBadge) {
             dashboardBadge.textContent = count;
             dashboardBadge.style.display = count > 0 ? 'flex' : 'none';
         }
 
-        // Header nav badge
         const navBadge = document.getElementById('navTodoBadge');
         if (navBadge) {
             navBadge.textContent = count;
             navBadge.style.display = count > 0 ? 'flex' : 'none';
         }
 
-        // Mobile drawer badge
         const drawerBadge = document.getElementById('drawerTodoBadge');
         if (drawerBadge) {
             drawerBadge.textContent = count;
@@ -1916,7 +1825,6 @@ const Reminder = {
     }
 };
 
-// ===== Data Import/Export =====
 const DataManager = {
     init() {
         document.getElementById('exportBtn').addEventListener('click', () => this.export());
@@ -1924,28 +1832,6 @@ const DataManager = {
     },
 
     async export() {
-        // Try cloud export first if enabled
-        if (Storage.cloudEnabled) {
-            try {
-                const url = `/api/export?token=${encodeURIComponent(Storage.userToken)}`;
-                const response = await fetch(url);
-                if (response.ok) {
-                    const data = await response.json();
-                    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-                    const urlObj = URL.createObjectURL(blob);
-                    const a = document.createElement('a');
-                    a.href = urlObj;
-                    a.download = `gw2_toolbox_backup_${Utils.getTodayKey()}.json`;
-                    a.click();
-                    URL.revokeObjectURL(urlObj);
-                    Toast.show('云端数据已导出');
-                    return;
-                }
-            } catch (e) {
-                console.warn('Cloud export failed, falling back to local:', e);
-            }
-        }
-
         const data = {
             projects: AppState.projects,
             trades: AppState.trades,
@@ -2006,165 +1892,72 @@ const DataManager = {
     }
 };
 
-// ===== Authentication & User Management =====
 const Auth = {
-    currentUser: null,
-    users: [],
-    settings: { allowRegister: true },
+    isLoggedIn: false,
+    isFirstTime: false,
 
     async init() {
-        // Initialize storage first
-        Storage.init();
-
-        // Load from storage (async)
-        this.users = await Storage.get('system_users') || [];
-        this.settings = await Storage.get('system_settings') || { allowRegister: true };
-
-        // Create admin user if none exists
-        if (this.users.length === 0) {
-            this.register('admin', 'admin123', 'admin');
+        const savedToken = localStorage.getItem('gw2_token');
+        if (savedToken) {
+            Storage.setToken(savedToken);
+            try {
+                const response = await fetch(`${API_BASE}/api/auth`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ password: '', action: 'check' })
+                });
+                if (response.ok) {
+                    const result = await response.json();
+                    if (result.authenticated) {
+                        this.isLoggedIn = true;
+                        this.showApp();
+                        return;
+                    }
+                }
+            } catch (e) {
+                console.warn('Token verify failed:', e);
+            }
+            Storage.setToken(null);
         }
 
-        // Check for saved login
-        const savedUser = await Storage.get('current_user');
-        if (savedUser) {
-            this.currentUser = savedUser;
-            // 恢复云端同步
-            Storage.setToken(savedUser.id, savedUser.id);
-            await this.loadUserData();
-            await AppState.init();
-            this.showApp();
-        }
+        this.checkFirstTime();
+        this.showLogin();
+        this.bindEvents();
+    },
 
-        // Update auth UI based on register settings
-        this.updateAuthUI();
+    checkFirstTime() {
+        this.isFirstTime = !localStorage.getItem('gw2_password_set');
+    },
 
-        // Bind auth events
+    bindEvents() {
         document.getElementById('authSubmit').addEventListener('click', () => this.submit());
+        document.getElementById('authPassword').addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') this.submit();
+        });
         document.getElementById('logoutBtn').addEventListener('click', () => this.logout());
-        document.getElementById('addUserBtn')?.addEventListener('click', () => this.addUser());
-        document.getElementById('updateAdminBtn')?.addEventListener('click', () => this.updateAdminInfo());
-        document.querySelectorAll('.auth-tab').forEach(tab => {
-            tab.addEventListener('click', () => {
-                document.querySelectorAll('.auth-tab').forEach(t => t.classList.remove('active'));
-                tab.classList.add('active');
-                document.getElementById('authSubmit').textContent = tab.dataset.auth === 'login' ? '登录' : '注册';
-            });
-        });
-
-        // Brand home link
-        document.getElementById('brandHome').addEventListener('click', () => {
-            Navigation.navigate('dashboard');
-        });
-
     },
 
-    updateAuthUI() {
-        const tabsContainer = document.querySelector('.auth-tabs');
-        const registerTab = document.querySelector('.auth-tab[data-auth="register"]');
-        const loginTab = document.querySelector('.auth-tab[data-auth="login"]');
-        const submitBtn = document.getElementById('authSubmit');
-
-        if (!this.settings.allowRegister) {
-            // Hide register tab
-            if (tabsContainer) tabsContainer.style.display = 'none';
-            // Ensure login is active
-            if (loginTab) loginTab.classList.add('active');
-            if (registerTab) registerTab.classList.remove('active');
-            if (submitBtn) submitBtn.textContent = '登录';
-        } else {
-            if (tabsContainer) tabsContainer.style.display = 'flex';
-        }
-    },
-
-    submit() {
-        const username = document.getElementById('authUsername').value.trim();
-        const password = document.getElementById('authPassword').value.trim();
-        const isLogin = document.querySelector('.auth-tab.active').dataset.auth === 'login';
-        const errorEl = document.getElementById('authError');
-
-        errorEl.style.display = 'none';
-
-        if (!username || !password) {
-            errorEl.textContent = '请输入用户名和密码';
-            errorEl.style.display = 'block';
-            return;
-        }
-
-        if (isLogin) {
-            this.login(username, password);
-        } else {
-            // Check if registration is allowed
-            if (!this.settings.allowRegister) {
-                errorEl.textContent = '注册功能已关闭';
-                errorEl.style.display = 'block';
-                return;
-            }
-            this.register(username, password);
-        }
-    },
-
-    async login(username, password) {
-        const user = this.users.find(u => u.username === username && u.password === password);
-        if (user) {
-            this.currentUser = user;
-            // 使用用户ID作为云端同步标识，改密码不影响数据
-            Storage.setToken(user.id, user.id);
-            await Storage.set('current_user', user);
-            await this.loadUserData();
-            await AppState.init(); // 初始化用户数据到 AppState
-            this.showApp();
-            Toast.show(`欢迎回来，${user.username}`);
-        } else {
-            document.getElementById('authError').textContent = '用户名或密码错误';
-            document.getElementById('authError').style.display = 'block';
-        }
-    },
-
-    async register(username, password, role = 'user') {
-        if (this.users.some(u => u.username === username)) {
-            const errorEl = document.getElementById('authError');
-            if (errorEl) {
-                errorEl.textContent = '用户名已存在';
-                errorEl.style.display = 'block';
-            }
-            return false;
-        }
-
-        const user = {
-            id: Utils.uuid(),
-            username,
-            password,
-            role,
-            createdAt: Date.now()
-        };
-
-        this.users.push(user);
-        await Storage.set('system_users', this.users);
-
-        if (role === 'admin') {
-            return true; // Silent admin creation
-        }
-
-        const errorEl = document.getElementById('authError');
-        if (errorEl) errorEl.style.display = 'none';
-        const loginTab = document.querySelector('.auth-tab[data-auth="login"]');
-        if (loginTab) loginTab.click();
-        Toast.show('注册成功，请登录');
-        return true;
-    },
-
-    async logout() {
-        await this.saveUserData();
-        Storage.remove('current_user');
-        Storage.clearToken(); // 清除云端同步标识
-        this.currentUser = null;
+    showLogin() {
+        document.getElementById('authOverlay').style.display = 'flex';
         document.getElementById('appHeader').style.display = 'none';
         document.getElementById('appMain').style.display = 'none';
-        document.getElementById('authOverlay').style.display = 'flex';
-        document.getElementById('authUsername').value = '';
-        document.getElementById('authPassword').value = '';
-        Toast.show('已退出登录');
+
+        const title = document.querySelector('.auth-title');
+        const subtitle = document.querySelector('.auth-subtitle');
+        const submitBtn = document.getElementById('authSubmit');
+        const hint = document.querySelector('.auth-hint');
+
+        if (this.isFirstTime) {
+            title.textContent = '设置访问密码';
+            subtitle.textContent = '首次使用，请设置访问密码来保护您的数据';
+            submitBtn.textContent = '设置密码';
+            hint.style.display = 'none';
+        } else {
+            title.textContent = 'GW2 工具箱';
+            subtitle.textContent = '请输入访问密码';
+            submitBtn.textContent = '登录';
+            hint.style.display = 'block';
+        }
     },
 
     showApp() {
@@ -2172,194 +1965,98 @@ const Auth = {
         document.getElementById('appHeader').style.display = 'flex';
         document.getElementById('appMain').style.display = 'block';
 
-        // Update user info
-        document.getElementById('userName').textContent = this.currentUser.username;
-        document.getElementById('userAvatar').textContent = this.currentUser.username.charAt(0).toUpperCase();
+        document.getElementById('userAvatar').textContent = 'U';
+        document.getElementById('userName').textContent = '用户';
 
-        // Show admin menu if admin
-        const isAdmin = this.currentUser.role === 'admin';
-        document.getElementById('adminNav').style.display = isAdmin ? 'block' : 'none';
-        document.getElementById('adminDrawerNav').style.display = isAdmin ? 'flex' : 'none';
+        document.getElementById('adminNav')?.style.setProperty('display', 'none');
+        document.getElementById('adminDrawerNav')?.style.setProperty('display', 'none');
 
-        if (isAdmin) {
-            Admin.load();
-        }
-
-        // Preload API data for dashboard
         Promise.all([
             ApiService.fetchDaily(true),
             ApiService.fetchActivity({}, true)
         ]).catch(() => {});
 
-        // Navigate to dashboard on initial login
         const hash = window.location.hash.replace('#', '') || 'dashboard';
         Navigation.navigate(hash, false);
     },
 
-    async loadUserData() {
-        if (!this.currentUser) return;
-        // Storage 层会自动添加用户前缀，直接传 key 即可
-        AppState.projects = await Storage.get('projects') || [];
-        AppState.trades = await Storage.get('trades') || [];
-        AppState.todos = await Storage.get('todos') || [];
-        AppState.dailyProgress = await Storage.get('daily_progress') || {};
-    },
-
-    async saveUserData() {
-        if (!this.currentUser) return;
-        // Storage 层会自动添加用户前缀，直接传 key 即可
-        await Storage.set('projects', AppState.projects);
-        await Storage.set('trades', AppState.trades);
-        await Storage.set('todos', AppState.todos);
-        await Storage.set('daily_progress', AppState.dailyProgress);
-    },
-
-    async addUser() {
-        const username = document.getElementById('newUserName').value.trim();
-        const password = document.getElementById('newUserPassword').value.trim();
-        const role = this.getSegmentValue('newUserRoleControl') || 'user';
-
-        if (!username || !password) {
-            Toast.show('请输入用户名和密码', 'error');
+    async submit() {
+        const password = document.getElementById('authPassword').value.trim();
+        if (!password) {
+            Toast.show('请输入密码', 'error');
             return;
         }
 
-        const success = await this.register(username, password, role);
-        if (success) {
-            Admin.renderUserList();
-            document.getElementById('newUserName').value = '';
-            document.getElementById('newUserPassword').value = '';
-            Toast.show('用户已添加');
-        }
-    },
+        const errorEl = document.getElementById('authError');
+        errorEl.style.display = 'none';
 
-    async deleteUser(userId) {
-        if (userId === this.currentUser.id) {
-            Toast.show('不能删除当前登录用户', 'error');
-            return;
-        }
-        this.users = this.users.filter(u => u.id !== userId);
-        await Storage.set('system_users', this.users);
-        Admin.renderUserList();
-        Toast.show('用户已删除');
-    },
+        try {
+            const action = this.isFirstTime ? 'setup' : 'login';
+            const response = await fetch(`${API_BASE}/api/auth`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ password, action })
+            });
 
-    async updateAdminInfo() {
-        const newName = document.getElementById('adminNameInput').value.trim();
-        const newPass = document.getElementById('adminPassInput').value.trim();
+            const result = await response.json();
 
-        if (!newName && !newPass) {
-            Toast.show('请输入新的用户名或密码', 'error');
-            return;
-        }
-
-        const admin = this.users.find(u => u.id === this.currentUser.id);
-        if (!admin) return;
-
-        if (newName) {
-            if (this.users.some(u => u.username === newName && u.id !== admin.id)) {
-                Toast.show('用户名已存在', 'error');
+            if (result.error) {
+                errorEl.textContent = result.error;
+                errorEl.style.display = 'block';
                 return;
             }
-            admin.username = newName;
-        }
-        if (newPass) {
-            admin.password = newPass;
-        }
 
-        await Storage.set('system_users', this.users);
-        this.currentUser = admin;
-        await Storage.set('current_user', admin);
-
-        // Update UI
-        document.getElementById('userName').textContent = admin.username;
-        document.getElementById('userAvatar').textContent = admin.username.charAt(0).toUpperCase();
-        document.getElementById('adminNameInput').value = '';
-        document.getElementById('adminPassInput').value = '';
-        Admin.renderUserList();
-        Toast.show('管理员信息已更新');
+            if (result.token) {
+                Storage.setToken(result.token);
+                if (this.isFirstTime) {
+                    localStorage.setItem('gw2_password_set', 'true');
+                }
+                this.isLoggedIn = true;
+                this.isFirstTime = false;
+                this.showApp();
+                Toast.show(this.isFirstTime ? '密码已设置' : '登录成功');
+            }
+        } catch (e) {
+            errorEl.textContent = '连接失败，请检查网络';
+            errorEl.style.display = 'block';
+        }
     },
 
-    getSegmentValue(controlId) {
-        const control = document.getElementById(controlId);
-        if (!control) return null;
-        const active = control.querySelector('.segment-btn.active');
-        return active ? active.dataset.value : null;
+    logout() {
+        Storage.setToken(null);
+        this.isLoggedIn = false;
+        Storage.clearCache();
+        AppState.projects = [];
+        AppState.trades = [];
+        AppState.todos = [];
+        AppState.dailyProgress = {};
+        this.checkFirstTime();
+        this.showLogin();
+        Toast.show('已退出登录');
     }
 };
 
-// ===== Admin Panel =====
-const Admin = {
-    loaded: false,
+async function loadAppData() {
+    if (!Storage.isConfigured()) return;
 
-    load() {
-        if (this.loaded) return;
-        this.loaded = true;
-        this.renderUserList();
-        this.bindEvents();
-    },
+    AppState.projects = await Storage.get('projects') || [];
+    AppState.trades = await Storage.get('trades') || [];
+    AppState.todos = await Storage.get('todos') || [];
+    AppState.dailyProgress = await Storage.get('daily_progress') || {};
 
-    bindEvents() {
-        // Register toggle
-        const toggle = document.getElementById('registerToggle');
-        if (toggle) {
-            toggle.checked = Auth.settings.allowRegister;
-            toggle.addEventListener('change', async () => {
-                Auth.settings.allowRegister = toggle.checked;
-                await Storage.set('system_settings', Auth.settings);
-                Auth.updateAuthUI();
-                Toast.show(toggle.checked ? '注册功能已开启' : '注册功能已关闭');
-            });
-        }
-
-        // Role segmented control
-        const roleControl = document.getElementById('newUserRoleControl');
-        if (roleControl) {
-            roleControl.querySelectorAll('.segment-btn').forEach(btn => {
-                btn.addEventListener('click', () => {
-                    roleControl.querySelectorAll('.segment-btn').forEach(b => b.classList.remove('active'));
-                    btn.classList.add('active');
-                });
-            });
-        }
-    },
-
-    renderUserList() {
-        const container = document.getElementById('adminUserList');
-        const badge = document.getElementById('userCountBadge');
-        if (!container) return;
-
-        if (badge) badge.textContent = Auth.users.length;
-
-        if (Auth.users.length === 0) {
-            container.innerHTML = '<div class="empty-small">暂无用户</div>';
-            return;
-        }
-
-        container.innerHTML = Auth.users.map(user => {
-            const isCurrent = user.id === Auth.currentUser?.id;
-            return `
-                <div class="admin-user-item">
-                    <div class="admin-user-info">
-                        <div class="user-avatar">${user.username.charAt(0).toUpperCase()}</div>
-                        <div>
-                            <div class="admin-user-name">${Utils.escapeHtml(user.username)} ${isCurrent ? '<span style="color:var(--primary);font-size:11px;">(当前)</span>' : ''}</div>
-                            <div class="admin-user-meta">${new Date(user.createdAt).toLocaleDateString('zh-CN')} 创建</div>
-                        </div>
-                    </div>
-                    <div style="display:flex;align-items:center;gap:10px;">
-                        <span class="role-badge ${user.role}">${user.role === 'admin' ? '管理员' : '用户'}</span>
-                        ${!isCurrent ? `<button class="btn btn-sm btn-danger" onclick="Auth.deleteUser('${user.id}')">删除</button>` : ''}
-                    </div>
-                </div>
-            `;
-        }).join('');
+    const savedPreviewType = await Storage.get('daily_preview_type');
+    if (savedPreviewType) {
+        Dashboard.previewType = savedPreviewType;
     }
-};
 
-// ===== Initialization =====
+    const savedTheme = await Storage.get('theme');
+    if (savedTheme) {
+        Theme.current = savedTheme;
+    }
+}
+
 document.addEventListener('DOMContentLoaded', async () => {
-    await Theme.init();
+    Theme.init();
     Toast.init();
     await Auth.init();
     Navigation.init();
@@ -2367,37 +2064,36 @@ document.addEventListener('DOMContentLoaded', async () => {
     Reminder.init();
     Reminder.requestPermission();
 
-    // Only navigate if user is already logged in
-    if (Auth.currentUser) {
-        // Init app state after login
-        await AppState.init();
-        // Preload API data for dashboard
+    await loadAppData();
+
+    if (Auth.isLoggedIn) {
         Promise.all([
             ApiService.fetchDaily(true),
             ApiService.fetchActivity({}, true)
         ]).catch(() => {});
-        
+
         const hash = window.location.hash.replace('#', '') || 'dashboard';
         Navigation.navigate(hash, false);
     }
 
-    // Keyboard shortcuts
     document.addEventListener('keydown', (e) => {
         if (e.ctrlKey || e.metaKey) {
             switch (e.key) {
-                case '1': e.preventDefault(); if (Auth.currentUser) Navigation.navigate('dashboard'); break;
-                case '2': e.preventDefault(); if (Auth.currentUser) Navigation.navigate('daily'); break;
-                case '3': e.preventDefault(); if (Auth.currentUser) Navigation.navigate('crafting'); break;
-                case '4': e.preventDefault(); if (Auth.currentUser) Navigation.navigate('trading'); break;
-                case '5': e.preventDefault(); if (Auth.currentUser) Navigation.navigate('todo'); break;
+                case '1': e.preventDefault(); if (Auth.isLoggedIn) Navigation.navigate('dashboard'); break;
+                case '2': e.preventDefault(); if (Auth.isLoggedIn) Navigation.navigate('daily'); break;
+                case '3': e.preventDefault(); if (Auth.isLoggedIn) Navigation.navigate('crafting'); break;
+                case '4': e.preventDefault(); if (Auth.isLoggedIn) Navigation.navigate('trading'); break;
+                case '5': e.preventDefault(); if (Auth.isLoggedIn) Navigation.navigate('todo'); break;
             }
         }
     });
 
-    // Auto-save user data periodically
     setInterval(async () => {
-        if (Auth.currentUser) {
-            await Auth.saveUserData();
+        if (Auth.isLoggedIn && Storage.isConfigured()) {
+            await Storage.set('projects', AppState.projects);
+            await Storage.set('trades', AppState.trades);
+            await Storage.set('todos', AppState.todos);
+            await Storage.set('daily_progress', AppState.dailyProgress);
         }
     }, 30000);
 });

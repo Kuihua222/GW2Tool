@@ -17,14 +17,9 @@
   <div class="auth-overlay" id="authOverlay">
     <div class="auth-panel">
       <div class="auth-title">GW2 工具箱</div>
-      <div class="auth-subtitle">登录以管理您的游戏数据</div>
-      <div class="auth-tabs">
-        <button class="auth-tab active" data-auth="login">登录</button>
-        <button class="auth-tab" data-auth="register">注册</button>
-      </div>
+      <div class="auth-subtitle">请输入访问密码</div>
       <div class="auth-form" id="authForm">
-        <input type="text" class="auth-input" id="authUsername" placeholder="用户名" autocomplete="username">
-        <input type="password" class="auth-input" id="authPassword" placeholder="密码" autocomplete="current-password">
+        <input type="password" class="auth-input" id="authPassword" placeholder="访问密码" autocomplete="current-password">
         <div class="auth-error" id="authError" style="display:none;"></div>
         <button class="auth-btn" id="authSubmit">登录</button>
       </div>
@@ -49,7 +44,6 @@
       <a href="#crafting" class="nav-link" data-page="crafting">制作</a>
       <a href="#trading" class="nav-link" data-page="trading">交易</a>
       <a href="#todo" class="nav-link" data-page="todo">待办<span class="nav-badge" id="navTodoBadge" style="display:none;">0</span></a>
-      <a href="#admin" class="nav-link" data-page="admin" id="adminNav" style="display:none;">管理</a>
     </nav>
     <div class="header-actions">
       <button class="icon-btn" id="themeToggle" title="切换主题">
@@ -106,10 +100,6 @@
         <a href="#todo" class="drawer-link" data-page="todo">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
           待办<span class="nav-badge" id="drawerTodoBadge" style="display:none;">0</span>
-        </a>
-        <a href="#admin" class="drawer-link" data-page="admin" id="adminDrawerNav" style="display:none;">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
-          用户管理
         </a>
       </nav>
     </div>
@@ -422,92 +412,6 @@
           </div>
           <div class="todo-list" id="todoList">
             <div class="empty-small">暂无任务</div>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- Admin View -->
-    <div class="view" id="admin-view">
-      <div class="view-header">
-        <h1 class="view-title">用户管理</h1>
-        <p class="view-subtitle">管理系统用户、注册开关和账户设置</p>
-      </div>
-      <div class="admin-layout">
-        <!-- 系统设置 -->
-        <div class="panel">
-          <div class="panel-header">
-            <span class="panel-title">系统设置</span>
-          </div>
-          <div class="form-body">
-            <div class="setting-item">
-              <div class="setting-info">
-                <div class="setting-label">开放注册</div>
-                <div class="setting-desc">允许新用户自行注册账户</div>
-              </div>
-              <label class="toggle-switch">
-                <input type="checkbox" id="registerToggle" checked>
-                <span class="toggle-slider"></span>
-              </label>
-            </div>
-          </div>
-        </div>
-
-        <!-- Admin 账户设置 -->
-        <div class="panel">
-          <div class="panel-header">
-            <span class="panel-title">管理员账户</span>
-          </div>
-          <div class="form-body">
-            <div class="form-row">
-              <div class="form-group">
-                <label class="form-label">管理员用户名</label>
-                <input type="text" class="form-input" id="adminNameInput" placeholder="输入新用户名">
-              </div>
-              <div class="form-group">
-                <label class="form-label">新密码</label>
-                <input type="password" class="form-input" id="adminPassInput" placeholder="输入新密码">
-              </div>
-            </div>
-            <button class="btn btn-primary btn-block" id="updateAdminBtn">更新管理员信息</button>
-          </div>
-        </div>
-
-        <!-- 添加用户 -->
-        <div class="panel">
-          <div class="panel-header">
-            <span class="panel-title">添加用户</span>
-          </div>
-          <div class="form-body">
-            <div class="form-row">
-              <div class="form-group">
-                <label class="form-label">用户名</label>
-                <input type="text" class="form-input" id="newUserName" placeholder="输入用户名">
-              </div>
-              <div class="form-group">
-                <label class="form-label">密码</label>
-                <input type="password" class="form-input" id="newUserPassword" placeholder="输入密码">
-              </div>
-            </div>
-            <div class="form-group">
-              <label class="form-label">角色</label>
-              <div class="segmented-control" id="newUserRoleControl">
-                <button class="segment-btn active" data-value="user">普通用户</button>
-                <button class="segment-btn" data-value="admin">管理员</button>
-              </div>
-            </div>
-            <button class="btn btn-primary btn-block" id="addUserBtn">添加用户</button>
-          </div>
-        </div>
-
-        <!-- 用户列表 -->
-        <div class="panel" style="grid-column: 1 / -1;">
-          <div class="panel-header">
-            <span class="panel-title">用户列表</span>
-            <span class="badge" id="userCountBadge">0</span>
-          </div>
-          <div class="admin-users" id="adminUserList">
-            <div class="empty-small">暂无用户</div>
           </div>
         </div>
       </div>
