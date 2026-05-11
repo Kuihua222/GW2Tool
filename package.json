@@ -1,0 +1,18 @@
+{
+  "name": "gw2-toolbox",
+  "version": "2.0.0",
+  "description": "GW2 Toolbox - Cloudflare Workers with KV Storage",
+  "scripts": {
+    "dev": "cd worker && wrangler dev",
+    "deploy": "cd worker && wrangler deploy",
+    "deploy:prod": "cd worker && wrangler deploy --env production",
+    "preview": "cd worker && wrangler dev",
+    "kv:create": "wrangler kv:namespace create GW2_DATA"
+  },
+  "keywords": ["gw2", "cloudflare", "workers", "kv"],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "wrangler": "^3.0.0"
+  }
+}

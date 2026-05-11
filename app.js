@@ -6,10 +6,13 @@
 
 const API_BASE = '';
 const HEADER_TOKEN = 'x-gw2-token';
+const USE_KV = true;
 
 const Storage = {
     token: localStorage.getItem('gw2_token'),
     cache: {},
+    kvSyncing: false,
+    pendingSync: [],
 
     isConfigured() {
         return !!this.token;
@@ -29,9 +32,12 @@ const Storage = {
             return this.cache[key];
         }
 
-        if (!this.token) {
-            const local = localStorage.getItem('gw2_' + key);
-            return local ? JSON.parse(local) : null;
+        const local = localStorage.getItem('gw2_' + key);
+        const localData = local ? JSON.parse(local) : null;
+
+        if (!this.token || !USE_KV) {
+            this.cache[key] = localData;
+            return localData;
         }
 
         try {
@@ -47,18 +53,18 @@ const Storage = {
                 return result.data;
             }
         } catch (e) {
-            console.warn('Storage get failed, using local:', e);
+            console.warn('KV get failed, using local:', e);
         }
 
-        const local = localStorage.getItem('gw2_' + key);
-        return local ? JSON.parse(local) : null;
+        this.cache[key] = localData;
+        return localData;
     },
 
     async set(key, value) {
         this.cache[key] = value;
         localStorage.setItem('gw2_' + key, JSON.stringify(value));
 
-        if (!this.token) return true;
+        if (!this.token || !USE_KV) return true;
 
         try {
             const response = await fetch(`${API_BASE}/api/data/${key}`, {
@@ -71,7 +77,7 @@ const Storage = {
             });
             return response.ok;
         } catch (e) {
-            console.warn('Storage set failed:', e);
+            console.warn('KV set failed, saved locally:', e);
             return false;
         }
     },
@@ -80,7 +86,7 @@ const Storage = {
         delete this.cache[key];
         localStorage.removeItem('gw2_' + key);
 
-        if (!this.token) return;
+        if (!this.token || !USE_KV) return;
 
         fetch(`${API_BASE}/api/data/${key}`, {
             method: 'DELETE',
@@ -90,6 +96,33 @@ const Storage = {
 
     clearCache() {
         this.cache = {};
+    },
+
+    async syncAllToKV() {
+        if (!this.token || !USE_KV || this.kvSyncing) return;
+
+        this.kvSyncing = true;
+        const keys = ['projects', 'trades', 'todos', 'daily_progress', 'theme', 'daily_preview_type'];
+
+        for (const key of keys) {
+            const local = localStorage.getItem('gw2_' + key);
+            if (local) {
+                try {
+                    await fetch(`${API_BASE}/api/data/${key}`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            [HEADER_TOKEN]: this.token
+                        },
+                        body: local
+                    });
+                } catch (e) {
+                    console.warn(`Sync ${key} failed:`, e);
+                }
+            }
+        }
+
+        this.kvSyncing = false;
     }
 };
 
@@ -1895,27 +1928,35 @@ const DataManager = {
 const Auth = {
     isLoggedIn: false,
     isFirstTime: false,
+    kvAvailable: false,
 
     async init() {
         const savedToken = localStorage.getItem('gw2_token');
         if (savedToken) {
             Storage.setToken(savedToken);
-            try {
-                const response = await fetch(`${API_BASE}/api/auth`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ password: '', action: 'check' })
-                });
-                if (response.ok) {
-                    const result = await response.json();
-                    if (result.authenticated) {
-                        this.isLoggedIn = true;
-                        this.showApp();
-                        return;
+            if (USE_KV) {
+                try {
+                    const response = await fetch(`${API_BASE}/api/auth`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ password: '', action: 'check' })
+                    });
+                    if (response.ok) {
+                        const result = await response.json();
+                        if (result.authenticated) {
+                            this.isLoggedIn = true;
+                            this.kvAvailable = true;
+                            this.showApp();
+                            return;
+                        }
                     }
+                } catch (e) {
+                    console.warn('Token verify failed, using local mode:', e);
                 }
-            } catch (e) {
-                console.warn('Token verify failed:', e);
+            } else {
+                this.isLoggedIn = true;
+                this.showApp();
+                return;
             }
             Storage.setToken(null);
         }
@@ -1990,6 +2031,11 @@ const Auth = {
         const errorEl = document.getElementById('authError');
         errorEl.style.display = 'none';
 
+        if (!USE_KV || !navigator.onLine) {
+            this.handleLocalAuth(password);
+            return;
+        }
+
         try {
             const action = this.isFirstTime ? 'setup' : 'login';
             const response = await fetch(`${API_BASE}/api/auth`, {
@@ -2013,18 +2059,60 @@ const Auth = {
                 }
                 this.isLoggedIn = true;
                 this.isFirstTime = false;
+                this.kvAvailable = true;
                 this.showApp();
                 Toast.show(this.isFirstTime ? '密码已设置' : '登录成功');
             }
         } catch (e) {
-            errorEl.textContent = '连接失败，请检查网络';
-            errorEl.style.display = 'block';
+            console.warn('KV auth failed, using local mode:', e);
+            this.handleLocalAuth(password);
         }
+    },
+
+    handleLocalAuth(password) {
+        const storedHash = localStorage.getItem('gw2_password_hash');
+        const inputHash = this.simpleHash(password);
+
+        if (this.isFirstTime) {
+            if (storedHash) {
+                errorEl.textContent = '已设置过密码，请登录';
+                errorEl.style.display = 'block';
+                return;
+            }
+            localStorage.setItem('gw2_password_hash', inputHash);
+            localStorage.setItem('gw2_password_set', 'true');
+            this.isFirstTime = false;
+            this.isLoggedIn = true;
+            this.showApp();
+            Toast.show('密码已设置（本地模式）');
+            return;
+        }
+
+        if (!storedHash || storedHash !== inputHash) {
+            errorEl.textContent = '密码错误';
+            errorEl.style.display = 'block';
+            return;
+        }
+
+        this.isLoggedIn = true;
+        this.showApp();
+        Toast.show('登录成功（本地模式）');
+    },
+
+    simpleHash(str) {
+        let hash = 0;
+        for (let i = 0; i < str.length; i++) {
+            const char = str.charCodeAt(i);
+            hash = ((hash << 5) - hash) + char;
+            hash = hash & hash;
+        }
+        return hash.toString(16);
     },
 
     logout() {
         Storage.setToken(null);
         this.isLoggedIn = false;
+        this.kvAvailable = false;
         Storage.clearCache();
         AppState.projects = [];
         AppState.trades = [];
@@ -2037,7 +2125,7 @@ const Auth = {
 };
 
 async function loadAppData() {
-    if (!Storage.isConfigured()) return;
+    if (!Storage.isConfigured() && !Auth.isLoggedIn) return;
 
     AppState.projects = await Storage.get('projects') || [];
     AppState.trades = await Storage.get('trades') || [];
@@ -2089,7 +2177,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
 
     setInterval(async () => {
-        if (Auth.isLoggedIn && Storage.isConfigured()) {
+        if (Auth.isLoggedIn) {
             await Storage.set('projects', AppState.projects);
             await Storage.set('trades', AppState.trades);
             await Storage.set('todos', AppState.todos);

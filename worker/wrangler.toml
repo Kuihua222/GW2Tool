@@ -2,9 +2,26 @@ name = "gw2-toolbox"
 main = "index.js"
 compatibility_date = "2024-01-01"
 
+# KV 命名空间配置
+[[kv_namespaces]]
+binding = "KV"
+id = "318ae33873514cf38f82f9e65810f583"
+preview_id = "318ae33873514cf38f82f9e65810f583"
+
+# 生产环境配置
+[env.production]
+name = "gw2-toolbox"
 kv_namespaces = [
-  { binding = "KV"", id = "318ae33873514cf38f82f9e65810f583" }
+  { binding = "KV", id = "318ae33873514cf38f82f9e65810f583" }
 ]
 
-[assets]
-directory = ".."
+# 开发/预览环境配置
+[env.preview]
+name = "gw2-toolbox-preview"
+kv_namespaces = [
+  { binding = "KV", preview_id = "318ae33873514cf38f82f9e65810f583" }
+]
+
+# 静态资源配置
+[site]
+bucket = "../"
